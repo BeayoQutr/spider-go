@@ -13,7 +13,7 @@ type Admin struct {
 }
 
 // TableName 指定表名
-func (Admin) TableName() string {
+func (*Admin) TableName() string {
 	return "administrators"
 }
 

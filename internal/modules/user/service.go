@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"spider-go/internal/common"
 	"spider-go/internal/service"
 	"spider-go/internal/shared"
 	"time"
@@ -203,7 +204,7 @@ func (s *userService) BindJwc(ctx context.Context, uid int, sid, spwd string) er
 	}
 
 	// 尝试登录教务系统验证账号
-	if err := s.sessionService.LoginAndCache(ctx, uid, sid, spwd); err != nil {
+	if _, err := s.sessionService.LoginAndGetClient(ctx, sid, spwd); err != nil {
 		return errors.New("请绑定i中南林APP账号")
 	}
 
@@ -213,7 +214,11 @@ func (s *userService) BindJwc(ctx context.Context, uid int, sid, spwd string) er
 	}
 
 	// 清除旧的会话缓存
-	_ = s.sessionService.InvalidateSession(ctx, uid)
+	err := s.sessionService.InvalidateSession(ctx, uid)
+
+	if err != nil {
+		return common.NewAppError(common.CodeCacheError, "更新成功，删除缓存失败")
+	}
 
 	return nil
 }
