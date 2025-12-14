@@ -9,6 +9,7 @@ import (
 	"spider-go/internal/modules/admin"
 	"spider-go/internal/modules/config"
 	"spider-go/internal/modules/course"
+	"spider-go/internal/modules/evaluation"
 	"spider-go/internal/modules/exam"
 	"spider-go/internal/modules/grade"
 	"spider-go/internal/modules/notice"
@@ -39,11 +40,12 @@ type Container struct {
 	UserQuery shared.UserQuery
 
 	// Caches
-	SessionCache  cache.SessionCache
-	CaptchaCache  cache.CaptchaCache
-	DAUCache      cache.DAUCache
-	ConfigCache   cache.ConfigCache
-	UserDataCache cache.UserDataCache
+	SessionCache    cache.SessionCache
+	CaptchaCache    cache.CaptchaCache
+	DAUCache        cache.DAUCache
+	ConfigCache     cache.ConfigCache
+	UserDataCache   cache.UserDataCache
+	EvaluationCache cache.EvaluationCache
 
 	// Services (infrastructure services only)
 	RSAKeyService  service.RSAKeyService
@@ -58,6 +60,7 @@ type Container struct {
 	GradeModule      *grade.Module
 	CourseModule     *course.Module
 	ExamModule       *exam.Module
+	EvaluationModule *evaluation.Module
 	NoticeModule     *notice.Module
 	ConfigModule     *config.Module
 	StatisticsModule *statistics.Module
@@ -177,6 +180,8 @@ func (c *Container) initCaches() {
 	c.ConfigCache = cache.NewRedisConfigCache(c.SessionRedis)
 	// 用户数据缓存（DB 0，与会话共用）
 	c.UserDataCache = cache.NewRedisUserDataCache(c.SessionRedis)
+	// 教评缓存 DB0
+	c.EvaluationCache = cache.NewEvaluationCache(c.SessionRedis)
 }
 
 // initServices 初始化 Services（仅基础设施服务）
@@ -279,6 +284,16 @@ func (c *Container) initModules() {
 		c.CrawlerService,
 		c.UserDataCache,
 		currentMode.ExamURL,
+	)
+
+	// Evaluation Module（教评模块）
+	c.EvaluationModule = evaluation.NewModule(
+		c.UserQuery,
+		c.SessionService,
+		c.EvaluationCache,
+		currentMode.EvaluationInfoURL,
+		currentMode.EvaluationRedirectURL,
+		currentMode.EvaluationDoLoginURL,
 	)
 
 	// Notice Module（通知模块）
