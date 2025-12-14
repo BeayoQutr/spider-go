@@ -64,9 +64,8 @@ jwc:
     grade_level_url: "http://jwgl.csuft.edu.cn/jsxsd/kscj/djkscj_list"
     exam_url: "http://jwgl.csuft.edu.cn/jsxsd/xsks/xsksap_list"
     # 教评系统配置
-    evaluation_login_url: ""
     evaluation_redirect_url: "https://cas.csuft.edu.cn/cas/login?service=https%3A%2F%2Fjxzlpt.csuft.edu.cn%3A443%2Fcas%2FtoUrl%3Ftype%3Dpc"
-    evaluation_info_url: ""
+    evaluation_info_url: "https://jxzlpt.csuft.edu.cn/api/xspj/xspj/getXspjtask"
 
   # WebVPN 配置
   webvpn:
