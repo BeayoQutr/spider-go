@@ -22,16 +22,22 @@ var (
 
 // Service 用户服务接口
 type Service interface {
-	// 认证相关
+	// Register 注册
 	Register(ctx context.Context, email, password, name, captcha string) (token string, err error)
+	// Login 用户登录
 	Login(ctx context.Context, email, password string) (token string, user *User, err error)
+	// ResetPassword 重置密码
 	ResetPassword(ctx context.Context, email, newPassword, captcha string) error
-
-	// 用户信息
+	// WeChatLogin 微信注册登录相关
+	WeChatLogin(ctx context.Context, code string) (token string, user *User, err error)
+	// WeChatBind 老用户绑定微信
+	WeChatBind(ctx context.Context, uid int, code string) (err error)
+	// GetUserInfo 用户信息
 	GetUserInfo(ctx context.Context, uid int) (*User, error)
 
-	// 教务系统绑定
+	// BindJwc 教务系统绑定相关
 	BindJwc(ctx context.Context, uid int, sid, spwd string) error
+	// CheckIsBind 检查是否绑定教务处
 	CheckIsBind(ctx context.Context, uid int) (bool, error)
 }
 
@@ -44,6 +50,8 @@ type userService struct {
 	jwtSecret      []byte
 	jwtIssuer      string
 	jwtExpire      time.Duration
+	appid          string
+	appsecret      string
 }
 
 // NewService 创建用户服务
@@ -54,6 +62,8 @@ func NewService(
 	dauService service.DAUService,
 	jwtSecret string,
 	jwtIssuer string,
+	appid string,
+	appsecret string,
 ) Service {
 	return &userService{
 		repo:           repo,
@@ -63,6 +73,8 @@ func NewService(
 		jwtSecret:      []byte(jwtSecret),
 		jwtIssuer:      jwtIssuer,
 		jwtExpire:      168 * time.Hour, // 7天
+		appid:          appid,
+		appsecret:      appsecret,
 	}
 }
 
@@ -231,4 +243,23 @@ func (s *userService) CheckIsBind(ctx context.Context, uid int) (bool, error) {
 	}
 
 	return user.Sid != "" && user.Spwd != "", nil
+}
+
+// WeChatLogin 微信登录/注册
+func (s *userService) WeChatLogin(ctx context.Context, code string) (string, *User, error) {
+
+	// TODO: 实现微信登录逻辑
+	// 1. 使用code换取openid
+	// 2. 查找是否存在该openid的绑定
+	// 3. 如果存在，直接登录；如果不存在，创建新用户
+	return "", nil, nil
+}
+
+// WeChatBind 老用户绑定微信
+func (s *userService) WeChatBind(ctx context.Context, uid int, code string) error {
+	// TODO: 实现微信绑定逻辑
+	// 1. 使用code换取openid
+	// 2. 检查openid是否已被其他用户绑定
+	// 3. 如果未绑定，创建绑定关系
+	return nil
 }

@@ -15,6 +15,7 @@ type Config struct {
 	Jwc      JwcConfig          `yaml:"jwc" mapstructure:"jwc"`
 	JWT      JWTConfig          `yaml:"jwt" mapstructure:"jwt"`
 	Email    EmailConfig        `yaml:"email" mapstructure:"email"`
+	Wx       WxConfig           `yaml:"wx" mapstructure:"wx"`
 }
 
 type Appconfig struct {
@@ -98,6 +99,10 @@ type RedisConfig struct {
 type RedisClusterConfig struct {
 	Session RedisConfig `yaml:"session" mapstructure:"session"` // DB 0: 用户会话缓存
 	Captcha RedisConfig `yaml:"captcha" mapstructure:"captcha"` // DB 1: 验证码存储
+}
+type WxConfig struct {
+	AppId     string `yaml:"app_id" mapstructure:"app_id"`
+	AppSecret string `yaml:"app_secret" mapstructure:"app_secret"`
 }
 
 var Conf *Config

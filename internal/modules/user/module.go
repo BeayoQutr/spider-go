@@ -24,10 +24,12 @@ func NewModule(
 	dauService service.DAUService,
 	jwtSecret string,
 	jwtIssuer string,
+	wxAppID string,
+	wxAppSecret string,
 ) *Module {
 	repo := NewRepository(db)
 	captchaService := NewCaptchaService(captchaCache, emailService)
-	svc := NewService(repo, sessionService, captchaService, dauService, jwtSecret, jwtIssuer)
+	svc := NewService(repo, sessionService, captchaService, dauService, jwtSecret, jwtIssuer, wxAppID, wxAppSecret)
 	handler := NewHandler(svc, captchaService)
 
 	return &Module{

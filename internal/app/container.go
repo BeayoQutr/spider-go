@@ -247,6 +247,8 @@ func (c *Container) initModules() {
 		c.DAUService,
 		c.Config.JWT.Secret,
 		c.Config.JWT.Issuer,
+		c.Config.Wx.AppId,
+		c.Config.Wx.AppSecret,
 	)
 
 	// Admin Module（管理员模块）

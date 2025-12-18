@@ -95,3 +95,8 @@ email:
   password: "kwxuotnueozvdjeb"
   from_name: "Spider-Go 验证码 [DEV]"
 
+wx:
+  app_id: "wx9a4655cca1fa3f42"
+  app_secret: ""
+
+

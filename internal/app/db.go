@@ -21,7 +21,8 @@ func InitDBWithConfig(config *Config) (*gorm.DB, error) {
 	}
 
 	// 自动迁移（使用新模块中的模型）
-	if err := db.AutoMigrate(&user.User{}, &notice.Notice{}, &admin.Admin{}); err != nil {
+	// 注意：先迁移被引用的表（User），再迁移引用它的表（UserWeChatMiniProgram）
+	if err := db.AutoMigrate(&user.User{}, &notice.Notice{}, &admin.Admin{}, &user.UserWeChatMiniProgram{}); err != nil {
 		return nil, err
 	}
 

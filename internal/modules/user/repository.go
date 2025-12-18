@@ -20,6 +20,12 @@ type Repository interface {
 	UpdatePassword(ctx context.Context, uid int, password string) error
 	UpdateJwc(ctx context.Context, uid int, sid, spwd string) error
 	Delete(ctx context.Context, uid int) error
+
+	// 微信相关
+	FindByWeChatOpenID(ctx context.Context, appID, openID string) (*User, error)
+	CreateWeChatBind(ctx context.Context, bind *UserWeChatMiniProgram) error
+	FindWeChatBindByUID(ctx context.Context, uid int, appID string) (*UserWeChatMiniProgram, error)
+	UpdateWeChatBind(ctx context.Context, bind *UserWeChatMiniProgram) error
 }
 
 // repository 用户数据访问实现
@@ -82,4 +88,40 @@ func (r *repository) UpdateJwc(ctx context.Context, uid int, sid, spwd string) e
 // Delete 删除用户
 func (r *repository) Delete(ctx context.Context, uid int) error {
 	return r.db.WithContext(ctx).Delete(&User{}, uid).Error
+}
+
+// FindByWeChatOpenID 根据微信OpenID查找用户
+func (r *repository) FindByWeChatOpenID(ctx context.Context, appID, openID string) (*User, error) {
+	var bind UserWeChatMiniProgram
+	if err := r.db.WithContext(ctx).Where("app_id = ? AND open_id = ?", appID, openID).First(&bind).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrUserNotFound
+		}
+		return nil, err
+	}
+
+	// 根据uid查找用户
+	return r.FindByID(ctx, bind.Uid)
+}
+
+// CreateWeChatBind 创建微信绑定
+func (r *repository) CreateWeChatBind(ctx context.Context, bind *UserWeChatMiniProgram) error {
+	return r.db.WithContext(ctx).Create(bind).Error
+}
+
+// FindWeChatBindByUID 根据用户ID和AppID查找微信绑定
+func (r *repository) FindWeChatBindByUID(ctx context.Context, uid int, appID string) (*UserWeChatMiniProgram, error) {
+	var bind UserWeChatMiniProgram
+	if err := r.db.WithContext(ctx).Where("uid = ? AND app_id = ?", uid, appID).First(&bind).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("wechat bind not found")
+		}
+		return nil, err
+	}
+	return &bind, nil
+}
+
+// UpdateWeChatBind 更新微信绑定
+func (r *repository) UpdateWeChatBind(ctx context.Context, bind *UserWeChatMiniProgram) error {
+	return r.db.WithContext(ctx).Save(bind).Error
 }

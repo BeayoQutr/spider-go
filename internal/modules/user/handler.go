@@ -29,6 +29,7 @@ func (h *Handler) RegisterRoutes(public *gin.RouterGroup, authenticated *gin.Rou
 		publicUser.POST("/register", h.Register)            // 用户注册
 		publicUser.POST("/login", h.Login)                  // 用户登录
 		publicUser.POST("/reset-password", h.ResetPassword) // 重置密码
+		publicUser.POST("/wechat/login", h.WeChatLogin)     // 微信登录/注册,app也可以用，拉起微信
 	}
 
 	// 验证码路由（公开）
@@ -37,9 +38,10 @@ func (h *Handler) RegisterRoutes(public *gin.RouterGroup, authenticated *gin.Rou
 		captcha.POST("/send", h.SendEmailCaptcha) // 发送邮箱验证码
 	}
 
-	authenticated.GET("/info", h.GetUserInfo)    // 获取用户信息
-	authenticated.POST("/bind", h.BindJwc)       // 绑定教务系统
-	authenticated.GET("/is-bind", h.CheckIsBind) // 检查绑定状态
+	authenticated.GET("/info", h.GetUserInfo)        // 获取用户信息
+	authenticated.POST("/bind", h.BindJwc)           // 绑定教务系统
+	authenticated.GET("/is-bind", h.CheckIsBind)     // 检查绑定状态
+	authenticated.POST("/wechat/bind", h.WeChatBind) // 老用户绑定微信
 }
 
 // Register 用户注册
@@ -160,8 +162,8 @@ func (h *Handler) GetUserInfo(c *gin.Context) {
 // BindJwc 绑定教务系统
 // @Summary 绑定教务系统
 // @Tags User
-// @Accept json
-// @Produce json
+// @Accept JSON
+// @Produce JSON
 // @Param request body BindJwcRequest true "绑定请求"
 // @Success 200 {object} gin.H
 // @Router /user/bind [post]
@@ -233,4 +235,60 @@ func (h *Handler) SendEmailCaptcha(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "验证码已发送"})
+}
+
+// WeChatLogin 微信登录/注册
+// @Summary 微信登录/注册
+// @Tags User
+// @Accept json
+// @Produce json
+// @Param request body WeChatLoginRequest true "微信登录请求"
+// @Success 200 {object} LoginResponse
+// @Router /user/wechat/login [post]
+func (h *Handler) WeChatLogin(c *gin.Context) {
+	var req WeChatLoginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.Error(c, common.CodeInvalidParams, err.Error())
+		return
+	}
+
+	token, user, err := h.service.WeChatLogin(c.Request.Context(), req.Code)
+	if err != nil {
+		common.Error(c, common.CodeInternalError, "微信登录失败")
+		return
+	}
+
+	common.Success(c, LoginResponse{
+		Token: token,
+		User:  user.ToResponse(),
+	})
+}
+
+// WeChatBind 老用户绑定微信
+// @Summary 老用户绑定微信
+// @Tags User
+// @Accept JSON
+// @Produce JSON
+// @Param request body WeChatLoginRequest true "微信绑定请求"
+// @Success 200 {object} gin.H
+// @Router /user/WeChat/bind [post]
+func (h *Handler) WeChatBind(c *gin.Context) {
+	uid, exists := c.Get("uid")
+	if !exists {
+		common.Error(c, common.CodeUnauthorized, "未授权")
+		return
+	}
+
+	var req WeChatLoginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.Error(c, common.CodeInvalidParams, err.Error())
+		return
+	}
+
+	if err := h.service.WeChatBind(c.Request.Context(), uid.(int), req.Code); err != nil {
+		common.Error(c, common.CodeInternalError, "绑定微信失败")
+		return
+	}
+
+	common.Success(c, gin.H{"message": "绑定微信成功"})
 }
