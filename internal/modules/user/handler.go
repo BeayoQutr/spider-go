@@ -254,7 +254,7 @@ func (h *Handler) WeChatLogin(c *gin.Context) {
 
 	token, user, err := h.service.WeChatLogin(c.Request.Context(), req.Code)
 	if err != nil {
-		common.Error(c, common.CodeInternalError, "微信登录失败")
+		common.Error(c, common.CodeWeChatLoginFailed, err.Error())
 		return
 	}
 
@@ -271,7 +271,7 @@ func (h *Handler) WeChatLogin(c *gin.Context) {
 // @Produce JSON
 // @Param request body WeChatLoginRequest true "微信绑定请求"
 // @Success 200 {object} gin.H
-// @Router /user/WeChat/bind [post]
+// @Router /user/wechat/bind [post]
 func (h *Handler) WeChatBind(c *gin.Context) {
 	uid, exists := c.Get("uid")
 	if !exists {
@@ -286,7 +286,11 @@ func (h *Handler) WeChatBind(c *gin.Context) {
 	}
 
 	if err := h.service.WeChatBind(c.Request.Context(), uid.(int), req.Code); err != nil {
-		common.Error(c, common.CodeInternalError, "绑定微信失败")
+		if appErr, ok := err.(*common.AppError); ok {
+			common.Error(c, appErr.Code, appErr.Message)
+		} else {
+			common.Error(c, common.CodeWeChatBindFailed, err.Error())
+		}
 		return
 	}
 

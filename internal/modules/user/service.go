@@ -2,7 +2,11 @@ package user
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
 	"regexp"
 	"spider-go/internal/common"
 	"spider-go/internal/service"
@@ -18,6 +22,7 @@ var (
 	ErrEmailAlreadyExists = errors.New("邮箱已被注册")
 	ErrInvalidCaptcha     = errors.New("验证码错误")
 	ErrEmptyParams        = errors.New("参数不能为空")
+	ErrWeChatAlreadyBind  = common.NewAppError(common.CodeWeChatAlreadyBind, "该微信已绑定其他账号")
 )
 
 // Service 用户服务接口
@@ -216,8 +221,8 @@ func (s *userService) BindJwc(ctx context.Context, uid int, sid, spwd string) er
 	}
 
 	// 尝试登录教务系统验证账号
-	if _, err := s.sessionService.LoginAndGetClient(ctx, sid, spwd); err != nil {
-		return errors.New("请绑定i中南林APP账号")
+	if err := s.sessionService.LoginCheck(ctx, sid, spwd); err != nil {
+		return common.NewAppError(common.CodeJwcLoginFailed, "请绑定i中南林APP账号")
 	}
 
 	// 更新数据库
@@ -247,19 +252,188 @@ func (s *userService) CheckIsBind(ctx context.Context, uid int) (bool, error) {
 
 // WeChatLogin 微信登录/注册
 func (s *userService) WeChatLogin(ctx context.Context, code string) (string, *User, error) {
+	// 1. 使用code换取openid和unionid
+	wxInfo, err := s.code2Session(ctx, code)
+	if err != nil {
+		return "", nil, err
+	}
 
-	// TODO: 实现微信登录逻辑
-	// 1. 使用code换取openid
 	// 2. 查找是否存在该openid的绑定
-	// 3. 如果存在，直接登录；如果不存在，创建新用户
-	return "", nil, nil
+	user, err := s.repo.FindByWeChatOpenID(ctx, s.appid, wxInfo.OpenID)
+	if err != nil && !errors.Is(err, ErrUserNotFound) {
+		return "", nil, err
+	}
+
+	// 3. 如果不存在，创建新用户并绑定
+	if user == nil {
+		user, err = s.createUserFromWeChat(ctx, wxInfo)
+		if err != nil {
+			return "", nil, err
+		}
+	} else {
+		// 更新最后登录时间和unionid（如果有）
+		if err := s.updateWeChatLoginInfo(ctx, user.Uid, wxInfo); err != nil {
+			return "", nil, err
+		}
+	}
+
+	// 记录DAU
+	_ = s.dauService.RecordUserActivity(ctx, user.Uid)
+
+	// 生成JWT token
+	claims := shared.UserClaims{
+		Uid:  user.Uid,
+		Name: user.Name,
+		RegisteredClaims: jwt.RegisteredClaims{
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(s.jwtExpire)),
+			Issuer:    s.jwtIssuer,
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString(s.jwtSecret)
+	if err != nil {
+		return "", nil, err
+	}
+
+	return tokenString, user, nil
 }
 
 // WeChatBind 老用户绑定微信
 func (s *userService) WeChatBind(ctx context.Context, uid int, code string) error {
-	// TODO: 实现微信绑定逻辑
-	// 1. 使用code换取openid
+	// 1. 使用code换取openid和unionid
+	wxInfo, err := s.code2Session(ctx, code)
+	if err != nil {
+		return err
+	}
+
 	// 2. 检查openid是否已被其他用户绑定
-	// 3. 如果未绑定，创建绑定关系
-	return nil
+	existingUser, err := s.repo.FindByWeChatOpenID(ctx, s.appid, wxInfo.OpenID)
+	if err != nil && !errors.Is(err, ErrUserNotFound) {
+		return err
+	}
+	if existingUser != nil && existingUser.Uid != uid {
+		return ErrWeChatAlreadyBind
+	}
+
+	// 3. 检查当前用户是否已绑定微信
+	existingBind, err := s.repo.FindWeChatBindByUID(ctx, uid, s.appid)
+	if err == nil && existingBind != nil {
+		// 已存在绑定，更新信息
+		existingBind.OpenID = wxInfo.OpenID
+		existingBind.UnionID = wxInfo.UnionID
+		existingBind.LastLogin = time.Now()
+		existingBind.UpdatedAt = time.Now()
+		return s.repo.UpdateWeChatBind(ctx, existingBind)
+	}
+
+	// 4. 创建新的绑定关系
+	bind := &UserWeChatMiniProgram{
+		Uid:       uid,
+		AppID:     s.appid,
+		OpenID:    wxInfo.OpenID,
+		UnionID:   wxInfo.UnionID,
+		LastLogin: time.Now(),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	return s.repo.CreateWeChatBind(ctx, bind)
+}
+
+// WeChatSessionResponse 微信登录响应
+type WeChatSessionResponse struct {
+	OpenID     string `json:"openid"`
+	SessionKey string `json:"session_key"`
+	UnionID    string `json:"unionid"`
+	ErrCode    int    `json:"errcode"`
+	ErrMsg     string `json:"errmsg"`
+}
+
+// code2Session 使用code换取openid和unionid
+func (s *userService) code2Session(ctx context.Context, code string) (*WeChatSessionResponse, error) {
+	url := fmt.Sprintf(
+		"https://api.weixin.qq.com/sns/jscode2session?appid=%s&secret=%s&js_code=%s&grant_type=authorization_code",
+		s.appid, s.appsecret, code,
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("创建请求失败: %w", err)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("请求微信接口失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("读取响应失败: %w", err)
+	}
+
+	var wxResp WeChatSessionResponse
+	if err := json.Unmarshal(body, &wxResp); err != nil {
+		return nil, fmt.Errorf("解析微信响应失败: %w", err)
+	}
+
+	if wxResp.ErrCode != 0 {
+		return nil, fmt.Errorf("微信接口返回错误: %d - %s", wxResp.ErrCode, wxResp.ErrMsg)
+	}
+
+	if wxResp.OpenID == "" {
+		return nil, errors.New("未获取到OpenID")
+	}
+
+	return &wxResp, nil
+}
+
+// createUserFromWeChat 从微信信息创建用户
+func (s *userService) createUserFromWeChat(ctx context.Context, wxInfo *WeChatSessionResponse) (*User, error) {
+	// 生成默认用户名
+	defaultName := fmt.Sprintf("微信用户_%s", wxInfo.OpenID[len(wxInfo.OpenID)-8:])
+	defaultEmail := fmt.Sprintf("wx_%s@wechat.local", wxInfo.OpenID)
+
+	user := &User{
+		Name:      defaultName,
+		Email:     defaultEmail,
+		Password:  "",
+		CreatedAt: time.Now(),
+	}
+
+	if err := s.repo.Create(ctx, user); err != nil {
+		return nil, fmt.Errorf("创建用户失败: %w", err)
+	}
+
+	bind := &UserWeChatMiniProgram{
+		Uid:       user.Uid,
+		AppID:     s.appid,
+		OpenID:    wxInfo.OpenID,
+		UnionID:   wxInfo.UnionID,
+		LastLogin: time.Now(),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+
+	if err := s.repo.CreateWeChatBind(ctx, bind); err != nil {
+		return nil, fmt.Errorf("创建微信绑定失败: %w", err)
+	}
+
+	return user, nil
+}
+
+// updateWeChatLoginInfo 更新微信登录信息
+func (s *userService) updateWeChatLoginInfo(ctx context.Context, uid int, wxInfo *WeChatSessionResponse) error {
+	bind, err := s.repo.FindWeChatBindByUID(ctx, uid, s.appid)
+	if err != nil {
+		return err
+	}
+
+	bind.UnionID = wxInfo.UnionID
+	bind.LastLogin = time.Now()
+	bind.UpdatedAt = time.Now()
+
+	return s.repo.UpdateWeChatBind(ctx, bind)
 }

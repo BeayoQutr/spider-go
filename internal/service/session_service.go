@@ -43,6 +43,8 @@ type SessionService interface {
 	LoginAndCacheWithConfig(ctx context.Context, uid int, username, password string, loginURL, redirectURL string, cookieCache CookieCache) error
 	// LoginAndGetClient 登录 CAS 并返回带 TGC cookie 的 client，供其他系统复用
 	LoginAndGetClient(ctx context.Context, username, password string) (*http.Client, error)
+	//LoginCheck 模拟一次登录以校验绑定的是否正确
+	LoginCheck(ctx context.Context, username, password string) error
 }
 
 // jwcSessionService 教务系统会话服务实现
@@ -206,43 +208,6 @@ func (s *jwcSessionService) GenerateRandomFingerPrintHash() (string, error) {
 
 	// 转成 hex 字符串返回
 	return hex.EncodeToString(h[:]), nil
-}
-
-// ReplaceClientID 替换clientID
-func (s *jwcSessionService) ReplaceClientID(rawURL, newClientID string) (string, error) {
-	// 解析外层 URL
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return "", err
-	}
-
-	// 解析外层 URL 的查询参数
-	q := u.Query()
-
-	// 获取 service 参数（内层 URL）
-	serviceRaw := q.Get("service")
-	if serviceRaw == "" {
-		return "", fmt.Errorf("service parameter not found")
-	}
-
-	// 解析 service URL
-	serviceURL, err := url.Parse(serviceRaw)
-	if err != nil {
-		return "", err
-	}
-
-	// 解析 service 内层查询参数
-	serviceQ := serviceURL.Query()
-
-	// 替换 client_id
-	serviceQ.Set("client_id", newClientID)
-	serviceURL.RawQuery = serviceQ.Encode()
-
-	// 替换回外层的 service 参数
-	q.Set("service", serviceURL.String())
-	u.RawQuery = q.Encode()
-
-	return u.String(), nil
 }
 
 // LoginAndCacheWithConfig 通用登录方法，支持自定义 URL 和缓存
@@ -445,4 +410,87 @@ func (s *jwcSessionService) LoginAndGetClient(ctx context.Context, username, pas
 
 	// TGC cookie 已在 jar 中，返回 client
 	return client, nil
+}
+func (s *jwcSessionService) LoginCheck(ctx context.Context, username, password string) error {
+	// 创建 cookie jar
+	jar, err := cookiejar.New(&cookiejar.Options{
+		PublicSuffixList: publicsuffix.List,
+	})
+	if err != nil {
+		return common.NewAppError(common.CodeJwcLoginFailed, "创建会话失败")
+	}
+
+	client := &http.Client{
+		Jar:     jar,
+		Timeout: s.timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse // 禁止自动跳转
+		},
+	}
+
+	// 请求登录页获取 execution
+	res, err := client.Get(s.loginURL)
+	if err != nil {
+		return common.NewAppError(common.CodeJwcLoginFailed, "连接系统失败")
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		return common.NewAppError(common.CodeJwcLoginFailed, fmt.Sprintf("响应异常: %d", res.StatusCode))
+	}
+
+	doc, err := goquery.NewDocumentFromReader(res.Body)
+	if err != nil {
+		return common.NewAppError(common.CodeJwcParseFailed, "解析登录页面失败")
+	}
+
+	execution := doc.Find("input[name='execution']").AttrOr("value", "")
+	if execution == "" {
+		return common.NewAppError(common.CodeJwcLoginFailed, "找不到 execution")
+	}
+
+	// 密码加密
+	encryptedPwd, err := s.encryptPassword(password)
+	if err != nil {
+		return common.NewAppError(common.CodeJwcLoginFailed, fmt.Sprintf("密码加密失败: %v", err))
+	}
+
+	fpVisitorId, err := s.GenerateRandomFingerPrintHash()
+	if err != nil {
+		return common.NewAppError(common.CodeInternalError, "生成设备指纹失败")
+	}
+
+	form := url.Values{
+		"username":    {username},
+		"password":    {encryptedPwd},
+		"execution":   {execution},
+		"fpVisitorId": {fpVisitorId},
+		"rememberMe":  {"on"},
+		"_eventId":    {"submit"},
+		"failN":       {"0"},
+		"submit1":     {"login1"},
+	}
+
+	// 构造 POST 请求
+	req, err := http.NewRequest("POST", s.loginURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return common.NewAppError(common.CodeJwcLoginFailed, "构造登录请求失败")
+	}
+
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Referer", s.loginURL)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return common.NewAppError(common.CodeJwcLoginFailed, "登录失败")
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != 302 {
+		return common.NewAppError(common.CodeJwcLoginFailed, "CAS 登录失败，未收到重定向")
+	}
+
+	// TGC cookie 已在 jar 中，返回 client
+	return nil
 }

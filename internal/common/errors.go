@@ -21,6 +21,9 @@ const (
 	CodeJwcParseFailed    = pkgerrors.CodeJwcParseFailed
 	CodeJwcRequestFailed  = pkgerrors.CodeJwcRequestFailed
 	CodeCacheError        = pkgerrors.CodeCacheError
+	CodeWeChatLoginFailed = pkgerrors.CodeWeChatLoginFailed
+	CodeWeChatBindFailed  = pkgerrors.CodeWeChatBindFailed
+	CodeWeChatAlreadyBind = pkgerrors.CodeWeChatAlreadyBind
 )
 
 // AppError 重新导出 pkg/errors 的类型（保持向后兼容）

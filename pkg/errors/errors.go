@@ -19,6 +19,9 @@ const (
 	CodeJwcParseFailed    = 40005 // 教务系统解析失败
 	CodeJwcRequestFailed  = 40006 // 教务系统请求失败
 	CodeCacheError        = 50001 // 缓存错误
+	CodeWeChatLoginFailed = 60001 // 微信登录失败
+	CodeWeChatBindFailed  = 60002 // 微信绑定失败
+	CodeWeChatAlreadyBind = 60003 // 微信已被绑定
 )
 
 // AppError 应用错误
