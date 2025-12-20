@@ -3,7 +3,6 @@ package evaluation
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -74,7 +73,7 @@ func (s *evaluationService) GetEvaluationInfo(ctx context.Context, uid int) (*[]
 	// TODO: 解析响应
 	fmt.Println(body)
 
-	return nil, errors.New("Not implemented")
+	return nil, common.NewAppError(common.CodeNotImplemented, "功能未实现")
 }
 
 // LoginAndCacheEvaluation 登录教评系统并缓存 accessToken
@@ -224,7 +223,7 @@ func (s *evaluationService) fetchWithAccessToken(ctx context.Context, method, ta
 
 	req, err := http.NewRequestWithContext(ctx, method, targetURL, body)
 	if err != nil {
-		return nil, fmt.Errorf("创建请求失败: %w", err)
+		return nil, common.NewAppError(common.CodeHttpRequestFailed, "创建请求失败")
 	}
 
 	// 设置请求头
@@ -241,12 +240,12 @@ func (s *evaluationService) fetchWithAccessToken(ctx context.Context, method, ta
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("请求失败: %w", err)
+		return nil, common.NewAppError(common.CodeHttpRequestFailed, "请求失败")
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		return nil, fmt.Errorf("响应状态码异常: %d", resp.StatusCode)
+		return nil, common.NewAppError(common.CodeInvalidResponse, fmt.Sprintf("响应状态码异常: %d", resp.StatusCode))
 	}
 
 	return resp.Body, nil

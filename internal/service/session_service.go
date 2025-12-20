@@ -9,7 +9,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/pem"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/cookiejar"
@@ -133,7 +132,7 @@ func (s *jwcSessionService) followGET(client *http.Client, start string, maxHops
 		_ = resp.Body.Close()
 
 		if loc == "" {
-			return nil, cur, errors.New("重定向缺少 Location")
+			return nil, cur, common.NewAppError(common.CodeJwcLoginFailed, "重定向缺少 Location")
 		}
 
 		// 解析相对跳转
@@ -143,14 +142,14 @@ func (s *jwcSessionService) followGET(client *http.Client, start string, maxHops
 
 		locURL, err := url.Parse(loc)
 		if err != nil {
-			return nil, cur, fmt.Errorf("location 无法解析: %v", err)
+			return nil, cur, common.NewAppError(common.CodeJwcParseFailed, "location 无法解析")
 		}
 
 		cur = lastReqURL.ResolveReference(locURL).String()
 		lastReqURL = locURL
 	}
 
-	return nil, cur, errors.New("重定向层级过多")
+	return nil, cur, common.NewAppError(common.CodeJwcLoginFailed, "重定向层级过多")
 }
 
 // GetCachedCookies 获取缓存的 cookies

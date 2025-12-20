@@ -2,7 +2,7 @@ package admin
 
 import (
 	"context"
-	"errors"
+	"spider-go/internal/common"
 	"spider-go/internal/service"
 	"spider-go/internal/shared"
 	"time"
@@ -12,8 +12,8 @@ import (
 )
 
 var (
-	ErrInvalidCredentials = errors.New("管理员不存在或密码错误")
-	ErrInvalidPassword    = errors.New("原密码错误")
+	ErrInvalidCredentials = common.NewAppError(common.CodeInvalidPassword, "管理员不存在或密码错误")
+	ErrInvalidPassword    = common.NewAppError(common.CodeInvalidPassword, "原密码错误")
 )
 
 // Service 管理员服务接口
@@ -156,11 +156,11 @@ func (s *adminService) BroadcastEmail(ctx context.Context, subject, content stri
 	// 获取所有用户的邮箱
 	emails, err := s.userQuery.GetAllUserEmails(ctx)
 	if err != nil {
-		return 0, 0, 0, errors.New("获取用户邮箱列表失败")
+		return 0, 0, 0, common.NewAppError(common.CodeDatabaseError, "获取用户邮箱列表失败")
 	}
 
 	if len(emails) == 0 {
-		return 0, 0, 0, errors.New("没有用户可以发送邮件")
+		return 0, 0, 0, common.NewAppError(common.CodeNotFound, "没有用户可以发送邮件")
 	}
 
 	// 群发邮件

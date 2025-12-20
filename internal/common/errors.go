@@ -2,7 +2,7 @@ package common
 
 import pkgerrors "spider-go/pkg/errors"
 
-// 重新导出 pkg/errors 的错误码（保持向后兼容）
+// 重新导出 pkg/errors 的错误码(保持向后兼容)
 const (
 	CodeSuccess           = pkgerrors.CodeSuccess
 	CodeInvalidParams     = pkgerrors.CodeInvalidParams
@@ -24,6 +24,18 @@ const (
 	CodeWeChatLoginFailed = pkgerrors.CodeWeChatLoginFailed
 	CodeWeChatBindFailed  = pkgerrors.CodeWeChatBindFailed
 	CodeWeChatAlreadyBind = pkgerrors.CodeWeChatAlreadyBind
+
+	// 新增错误码
+	CodeDatabaseError      = pkgerrors.CodeDatabaseError
+	CodeConfigError        = pkgerrors.CodeConfigError
+	CodeRedisError         = pkgerrors.CodeRedisError
+	CodeEmailError         = pkgerrors.CodeEmailError
+	CodeAdminNotFound      = pkgerrors.CodeAdminNotFound
+	CodeNoticeNotFound     = pkgerrors.CodeNoticeNotFound
+	CodeWeChatBindNotFound = pkgerrors.CodeWeChatBindNotFound
+	CodeHttpRequestFailed  = pkgerrors.CodeHttpRequestFailed
+	CodeInvalidResponse    = pkgerrors.CodeInvalidResponse
+	CodeNotImplemented     = pkgerrors.CodeNotImplemented
 )
 
 // AppError 重新导出 pkg/errors 的类型（保持向后兼容）

@@ -3,12 +3,13 @@ package admin
 import (
 	"context"
 	"errors"
+	"spider-go/internal/common"
 
 	"gorm.io/gorm"
 )
 
 var (
-	ErrAdminNotFound = errors.New("admin not found")
+	ErrAdminNotFound = common.NewAppError(common.CodeAdminNotFound, "admin not found")
 )
 
 // Repository 管理员数据访问接口

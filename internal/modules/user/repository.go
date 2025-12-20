@@ -3,12 +3,14 @@ package user
 import (
 	"context"
 	"errors"
+	"spider-go/internal/common"
 
 	"gorm.io/gorm"
 )
 
 var (
-	ErrUserNotFound = errors.New("user not found")
+	ErrUserNotFound       = common.NewAppError(common.CodeUserNotFound, "user not found")
+	ErrWeChatBindNotFound = common.NewAppError(common.CodeWeChatBindNotFound, "wechat bind not found")
 )
 
 // Repository 用户数据访问接口
@@ -114,7 +116,7 @@ func (r *repository) FindWeChatBindByUID(ctx context.Context, uid int, appID str
 	var bind UserWeChatMiniProgram
 	if err := r.db.WithContext(ctx).Where("uid = ? AND app_id = ?", uid, appID).First(&bind).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errors.New("wechat bind not found")
+			return nil, ErrWeChatBindNotFound
 		}
 		return nil, err
 	}

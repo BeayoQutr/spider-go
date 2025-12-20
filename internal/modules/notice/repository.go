@@ -3,12 +3,13 @@ package notice
 import (
 	"context"
 	"errors"
+	"spider-go/internal/common"
 
 	"gorm.io/gorm"
 )
 
 var (
-	ErrNoticeNotFound = errors.New("notice not found")
+	ErrNoticeNotFound = common.NewAppError(common.CodeNoticeNotFound, "notice not found")
 )
 
 // Repository 通知数据访问接口

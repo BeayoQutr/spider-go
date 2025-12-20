@@ -18,10 +18,10 @@ import (
 )
 
 var (
-	ErrInvalidCredentials = errors.New("用户不存在或密码错误")
-	ErrEmailAlreadyExists = errors.New("邮箱已被注册")
-	ErrInvalidCaptcha     = errors.New("验证码错误")
-	ErrEmptyParams        = errors.New("参数不能为空")
+	ErrInvalidCredentials = common.NewAppError(common.CodeInvalidPassword, "用户不存在或密码错误")
+	ErrEmailAlreadyExists = common.NewAppError(common.CodeUserAlreadyExists, "邮箱已被注册")
+	ErrInvalidCaptcha     = common.NewAppError(common.CodeCaptchaInvalid, "验证码错误")
+	ErrEmptyParams        = common.NewAppError(common.CodeInvalidParams, "参数不能为空")
 	ErrWeChatAlreadyBind  = common.NewAppError(common.CodeWeChatAlreadyBind, "该微信已绑定其他账号")
 )
 
@@ -217,7 +217,7 @@ func (s *userService) BindJwc(ctx context.Context, uid int, sid, spwd string) er
 	hasDigit := regexp.MustCompile(`\d`).MatchString(spwd)
 	hasSymbol := regexp.MustCompile(`[^A-Za-z0-9]`).MatchString(spwd)
 	if !(hasUpper && hasLower && hasDigit && hasSymbol) {
-		return errors.New("请绑定i中南林APP账号")
+		return common.NewAppError(common.CodeInvalidParams, "请绑定i中南林APP账号")
 	}
 
 	// 尝试登录教务系统验证账号
@@ -341,6 +341,15 @@ func (s *userService) WeChatBind(ctx context.Context, uid int, code string) erro
 	return s.repo.CreateWeChatBind(ctx, bind)
 }
 
+// CheckIsWeChatBind 检查用户是否绑定微信
+func (s *userService) CheckIsWeChatBind(ctx context.Context, uid int) (bool, error) {
+	isExistUser, err := s.repo.FindWeChatBindByUID(ctx, uid, s.appid)
+	if err != nil {
+		return false, err
+	}
+	return isExistUser != nil, nil
+}
+
 // WeChatSessionResponse 微信登录响应
 type WeChatSessionResponse struct {
 	OpenID     string `json:"openid"`
@@ -359,32 +368,32 @@ func (s *userService) code2Session(ctx context.Context, code string) (*WeChatSes
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("创建请求失败: %w", err)
+		return nil, common.NewAppError(common.CodeHttpRequestFailed, "创建请求失败")
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("请求微信接口失败: %w", err)
+		return nil, common.NewAppError(common.CodeWeChatLoginFailed, "请求微信接口失败")
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("读取响应失败: %w", err)
+		return nil, common.NewAppError(common.CodeWeChatLoginFailed, "读取响应失败")
 	}
 
 	var wxResp WeChatSessionResponse
 	if err := json.Unmarshal(body, &wxResp); err != nil {
-		return nil, fmt.Errorf("解析微信响应失败: %w", err)
+		return nil, common.NewAppError(common.CodeInvalidResponse, "解析微信响应失败")
 	}
 
 	if wxResp.ErrCode != 0 {
-		return nil, fmt.Errorf("微信接口返回错误: %d - %s", wxResp.ErrCode, wxResp.ErrMsg)
+		return nil, common.NewAppError(common.CodeWeChatLoginFailed, fmt.Sprintf("微信接口返回错误: %d - %s", wxResp.ErrCode, wxResp.ErrMsg))
 	}
 
 	if wxResp.OpenID == "" {
-		return nil, errors.New("未获取到OpenID")
+		return nil, common.NewAppError(common.CodeWeChatLoginFailed, "未获取到OpenID")
 	}
 
 	return &wxResp, nil
@@ -404,7 +413,7 @@ func (s *userService) createUserFromWeChat(ctx context.Context, wxInfo *WeChatSe
 	}
 
 	if err := s.repo.Create(ctx, user); err != nil {
-		return nil, fmt.Errorf("创建用户失败: %w", err)
+		return nil, common.NewAppError(common.CodeDatabaseError, "创建用户失败")
 	}
 
 	bind := &UserWeChatMiniProgram{
@@ -418,7 +427,7 @@ func (s *userService) createUserFromWeChat(ctx context.Context, wxInfo *WeChatSe
 	}
 
 	if err := s.repo.CreateWeChatBind(ctx, bind); err != nil {
-		return nil, fmt.Errorf("创建微信绑定失败: %w", err)
+		return nil, common.NewAppError(common.CodeWeChatBindFailed, "创建微信绑定失败")
 	}
 
 	return user, nil

@@ -22,6 +22,18 @@ const (
 	CodeWeChatLoginFailed = 60001 // 微信登录失败
 	CodeWeChatBindFailed  = 60002 // 微信绑定失败
 	CodeWeChatAlreadyBind = 60003 // 微信已被绑定
+
+	// 新增错误码
+	CodeDatabaseError      = 50002 // 数据库错误
+	CodeConfigError        = 50003 // 配置错误
+	CodeRedisError         = 50004 // Redis错误
+	CodeEmailError         = 50005 // 邮件发送错误
+	CodeAdminNotFound      = 40401 // 管理员不存在
+	CodeNoticeNotFound     = 40402 // 通知不存在
+	CodeWeChatBindNotFound = 60004 // 微信绑定不存在
+	CodeHttpRequestFailed  = 50010 // HTTP请求失败
+	CodeInvalidResponse    = 50011 // 响应格式错误
+	CodeNotImplemented     = 50100 // 功能未实现
 )
 
 // AppError 应用错误

@@ -2,10 +2,10 @@ package httpclient
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	pkgerrors "spider-go/pkg/errors"
 	"strings"
 	"time"
 )
@@ -44,7 +44,7 @@ func (c *crawler) FetchWithCookies(ctx context.Context, method, targetURL string
 
 	req, err := http.NewRequestWithContext(ctx, method, targetURL, body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, pkgerrors.NewAppError(pkgerrors.CodeHttpRequestFailed, "failed to create request")
 	}
 
 	// 添加 cookies
@@ -64,12 +64,12 @@ func (c *crawler) FetchWithCookies(ctx context.Context, method, targetURL string
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		return nil, pkgerrors.NewAppError(pkgerrors.CodeHttpRequestFailed, "request failed")
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return nil, pkgerrors.NewAppError(pkgerrors.CodeInvalidResponse, "unexpected status code")
 	}
 
 	return resp.Body, nil

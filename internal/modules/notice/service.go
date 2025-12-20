@@ -2,12 +2,12 @@ package notice
 
 import (
 	"context"
-	"errors"
+	"spider-go/internal/common"
 	"time"
 )
 
 var (
-	ErrEmptyContent = errors.New("通知内容不能为空")
+	ErrEmptyContent = common.NewAppError(common.CodeInvalidParams, "通知内容不能为空")
 )
 
 // Service 通知服务接口

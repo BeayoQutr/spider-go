@@ -3,12 +3,13 @@ package shared
 import (
 	"context"
 	"errors"
+	"spider-go/internal/common"
 
 	"gorm.io/gorm"
 )
 
 var (
-	ErrUserNotFound = errors.New("user not found")
+	ErrUserNotFound = common.NewAppError(common.CodeUserNotFound, "user not found")
 )
 
 // UserInfo 用户基本信息（用于跨模块查询）
