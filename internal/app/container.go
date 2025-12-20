@@ -266,6 +266,7 @@ func (c *Container) initModules() {
 		c.SessionService,
 		c.CrawlerService,
 		c.UserDataCache,
+		c.ConfigCache,
 		currentMode.GradeURL,
 		currentMode.GradeLevelURL,
 	)

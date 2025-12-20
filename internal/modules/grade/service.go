@@ -24,6 +24,8 @@ type Service interface {
 	GetAllGrades(ctx context.Context, uid int) ([]Grade, *GPA, error)
 	GetGradesByTerm(ctx context.Context, uid int, term string) ([]Grade, *GPA, error)
 	GetLevelGrades(ctx context.Context, uid int) ([]LevelGrade, error)
+	// 成绩分析接口
+	GetRecentTermsGrades(ctx context.Context, uid int) (*TermsGradesAnalysis, error)
 }
 
 // gradeService 成绩服务实现
@@ -32,6 +34,7 @@ type gradeService struct {
 	sessionService service.SessionService
 	crawlerService service.CrawlerService
 	userDataCache  cache.UserDataCache
+	configCache    cache.ConfigCache
 	gradeURL       string
 	gradeLevelURL  string
 }
@@ -42,6 +45,7 @@ func NewService(
 	sessionService service.SessionService,
 	crawlerService service.CrawlerService,
 	userDataCache cache.UserDataCache,
+	configCache cache.ConfigCache,
 	gradeURL string,
 	gradeLevelURL string,
 ) Service {
@@ -50,6 +54,7 @@ func NewService(
 		sessionService: sessionService,
 		crawlerService: crawlerService,
 		userDataCache:  userDataCache,
+		configCache:    configCache,
 		gradeURL:       gradeURL,
 		gradeLevelURL:  gradeLevelURL,
 	}
@@ -543,4 +548,154 @@ func handelGp(scoreText string) float64 {
 
 func round3(v float64) float64 {
 	return math.Round(v*1000) / 1000
+}
+
+// GetRecentTermsGrades 获取最近三个学期的成绩分析
+func (s *gradeService) GetRecentTermsGrades(ctx context.Context, uid int) (*TermsGradesAnalysis, error) {
+	// 1. 获取最近三个学期
+	terms, err := s.configCache.GetPreviousTerms(ctx, 3)
+	if err != nil {
+		return nil, common.NewAppError(common.CodeInternalError, "获取学期失败")
+	}
+
+	// 2. 获取所有成绩
+	allGrades, overallGPA, err := s.GetAllGrades(ctx, uid)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. 按学期分组成绩（只统计 GPA，不返回具体成绩列表）
+	termsData := make([]TermGradesData, 0)
+	for _, term := range terms {
+		termGrades := s.filterGradesByTerm(allGrades, term)
+
+		var termGPA *GPA
+		if len(termGrades) == 0 {
+			// 如果该学期没有成绩，返回空统计
+			termGPA = &GPA{
+				AverageGPA:   0,
+				AverageScore: 0,
+				BasicScore:   0,
+			}
+		} else {
+			// 计算该学期的 GPA
+			termGPA = s.calculateGPA(termGrades)
+		}
+
+		// 只添加学期和统计数据，不包含具体成绩列表
+		termsData = append(termsData, TermGradesData{
+			Term: term,
+			GPA:  termGPA,
+		})
+	}
+
+	// 4. 趋势分析
+	trendAnalysis := s.analyzeTrend(termsData)
+
+	return &TermsGradesAnalysis{
+		CurrentTerm:   terms[0],
+		TermsData:     termsData,
+		OverallGPA:    overallGPA,
+		TrendAnalysis: trendAnalysis,
+	}, nil
+}
+
+// filterGradesByTerm 按学期过滤成绩
+func (s *gradeService) filterGradesByTerm(grades []Grade, term string) []Grade {
+	filtered := make([]Grade, 0)
+	for _, grade := range grades {
+		if grade.Term == term {
+			filtered = append(filtered, grade)
+		}
+	}
+	return filtered
+}
+
+// analyzeTrend 分析成绩趋势
+func (s *gradeService) analyzeTrend(termsData []TermGradesData) *TrendAnalysis {
+	if len(termsData) < 2 {
+		return &TrendAnalysis{
+			GPATrend:     "数据不足",
+			ScoreTrend:   "数据不足",
+			BestTerm:     "",
+			BestTermGPA:  0,
+			WorstTerm:    "",
+			WorstTermGPA: 0,
+		}
+	}
+
+	// 找出最好和最差的学期
+	var bestTerm, worstTerm string
+	var bestGPA, worstGPA float64 = 0, 999.0
+	firstValidGPA := true
+
+	gpas := make([]float64, 0)
+	for _, data := range termsData {
+		// 检查该学期是否有有效的 GPA 数据
+		if data.GPA == nil || (data.GPA.AverageGPA == 0 && data.GPA.AverageScore == 0) {
+			continue
+		}
+
+		gpa := data.GPA.AverageGPA
+		gpas = append(gpas, gpa)
+
+		// 初始化最好和最差的 GPA
+		if firstValidGPA {
+			bestGPA = gpa
+			worstGPA = gpa
+			bestTerm = data.Term
+			worstTerm = data.Term
+			firstValidGPA = false
+			continue
+		}
+
+		// 更新最好的学期
+		if gpa > bestGPA {
+			bestGPA = gpa
+			bestTerm = data.Term
+		}
+
+		// 更新最差的学期
+		if gpa < worstGPA {
+			worstGPA = gpa
+			worstTerm = data.Term
+		}
+	}
+
+	// 如果没有有效数据
+	if len(gpas) == 0 {
+		return &TrendAnalysis{
+			GPATrend:     "暂无数据",
+			ScoreTrend:   "暂无数据",
+			BestTerm:     "",
+			BestTermGPA:  0,
+			WorstTerm:    "",
+			WorstTermGPA: 0,
+		}
+	}
+
+	// 分析趋势（比较最近两个学期）
+	gpaTrend := "稳定"
+	scoreTrend := "稳定"
+
+	if len(gpas) >= 2 {
+		// gpas[0] 是当前学期，gpas[1] 是上一学期
+		diff := gpas[0] - gpas[1]
+		if diff > 0.1 {
+			gpaTrend = "上升"
+			scoreTrend = "上升"
+		} else if diff < -0.1 {
+			gpaTrend = "下降"
+			scoreTrend = "下降"
+		}
+	}
+
+	return &TrendAnalysis{
+		GPATrend:     gpaTrend,
+		ScoreTrend:   scoreTrend,
+		BestTerm:     bestTerm,
+		BestTermGPA:  bestGPA,
+		WorstTerm:    worstTerm,
+		WorstTermGPA: worstGPA,
+	}
 }

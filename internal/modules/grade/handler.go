@@ -22,8 +22,9 @@ func NewHandler(service Service) *Handler {
 func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	grades := r.Group("/grades")
 	{
-		grades.GET("", h.GetGrades)            // 获取成绩（可选term参数）
-		grades.GET("/level", h.GetLevelGrades) // 获取等级考试成绩
+		grades.GET("", h.GetGrades)                  // 获取成绩（可选term参数）
+		grades.GET("/level", h.GetLevelGrades)       // 获取等级考试成绩
+		grades.GET("/analysis", h.GetGradesAnalysis) // 获取成绩分析
 	}
 }
 
@@ -95,4 +96,30 @@ func (h *Handler) GetLevelGrades(c *gin.Context) {
 	}
 
 	common.Success(c, grades)
+}
+
+// GetGradesAnalysis 获取成绩分析
+// @Summary 获取最近三个学期的成绩分析
+// @Tags Grade
+// @Produce json
+// @Success 200 {object} TermsGradesAnalysis
+// @Router /grades/analysis [get]
+func (h *Handler) GetGradesAnalysis(c *gin.Context) {
+	uid, ok := c.Get("uid")
+	if !ok {
+		common.Error(c, common.CodeUnauthorized, "未授权")
+		return
+	}
+
+	analysis, err := h.service.GetRecentTermsGrades(c.Request.Context(), uid.(int))
+	if err != nil {
+		if appErr, ok := err.(*common.AppError); ok {
+			common.ErrorWithAppError(c, appErr)
+		} else {
+			common.Error(c, common.CodeInternalError, "获取成绩分析失败")
+		}
+		return
+	}
+
+	common.Success(c, analysis)
 }

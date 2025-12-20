@@ -38,3 +38,28 @@ type GradesResponse struct {
 	Grades []Grade `json:"grades"`
 	GPA    *GPA    `json:"gpa"`
 }
+
+// TermGradesData 单个学期的成绩数据
+type TermGradesData struct {
+	Term   string  `json:"term"`   // 学期
+	Grades []Grade `json:"grades"` // 成绩列表（仅在详细查询时返回）
+	GPA    *GPA    `json:"gpa"`    // GPA统计
+}
+
+// TermsGradesAnalysis 多学期成绩分析
+type TermsGradesAnalysis struct {
+	CurrentTerm   string           `json:"current_term"`   // 当前学期
+	TermsData     []TermGradesData `json:"terms_data"`     // 各学期数据
+	OverallGPA    *GPA             `json:"overall_gpa"`    // 总体GPA
+	TrendAnalysis *TrendAnalysis   `json:"trend_analysis"` // 趋势分析
+}
+
+// TrendAnalysis 趋势分析
+type TrendAnalysis struct {
+	GPATrend     string  `json:"gpa_trend"`      // GPA趋势：上升/下降/稳定
+	ScoreTrend   string  `json:"score_trend"`    // 成绩趋势
+	BestTerm     string  `json:"best_term"`      // 最好的学期
+	BestTermGPA  float64 `json:"best_term_gpa"`  // 最好学期的GPA
+	WorstTerm    string  `json:"worst_term"`     // 最差的学期
+	WorstTermGPA float64 `json:"worst_term_gpa"` // 最差学期的GPA
+}
