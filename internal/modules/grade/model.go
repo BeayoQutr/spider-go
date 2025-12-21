@@ -11,6 +11,7 @@ type Grade struct {
 	Gpa      float64 `json:"gpa"`      // 绩点
 	Status   int     `json:"Status"`   // 状态：0=正常考试，1=补考/重修
 	Property string  `json:"property"` // 课程性质：必修/选修
+	Flag     string  `json:"flag"`     //课程标志 修复缓考还计算成绩的bug
 }
 
 // GPA 绩点信息

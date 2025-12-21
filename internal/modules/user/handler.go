@@ -38,10 +38,12 @@ func (h *Handler) RegisterRoutes(public *gin.RouterGroup, authenticated *gin.Rou
 		captcha.POST("/send", h.SendEmailCaptcha) // 发送邮箱验证码
 	}
 
-	authenticated.GET("/info", h.GetUserInfo)        // 获取用户信息
-	authenticated.POST("/bind", h.BindJwc)           // 绑定教务系统
-	authenticated.GET("/is-bind", h.CheckIsBind)     // 检查绑定状态
-	authenticated.POST("/wechat/bind", h.WeChatBind) // 老用户绑定微信
+	authenticated.GET("/info", h.GetUserInfo)          // 获取用户信息
+	authenticated.POST("/bind", h.BindJwc)             // 绑定教务系统
+	authenticated.GET("/is-bind", h.CheckIsBind)       // 检查绑定状态
+	authenticated.POST("/wechat/bind", h.WeChatBind)   // 老用户绑定微信
+	authenticated.POST("/update-name", h.UpdateName)   // 更新用户名
+	authenticated.POST("/update-email", h.UpdateEmail) // 更新邮箱
 }
 
 // Register 用户注册
@@ -295,4 +297,74 @@ func (h *Handler) WeChatBind(c *gin.Context) {
 	}
 
 	common.Success(c, gin.H{"message": "绑定微信成功"})
+}
+
+// UpdateName 更新用户名
+// @Summary 更新用户名
+// @Tags User
+// @Accept json
+// @Produce json
+// @Param request body UpdateNameRequest true "更新用户名请求"
+// @Success 200 {object} gin.H
+// @Router /update-name [post]
+func (h *Handler) UpdateName(c *gin.Context) {
+	uid, exists := c.Get("uid")
+	if !exists {
+		common.Error(c, common.CodeUnauthorized, "未授权")
+		return
+	}
+
+	var req UpdateNameRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.Error(c, common.CodeInvalidParams, err.Error())
+		return
+	}
+
+	if err := h.service.UpdateName(c.Request.Context(), uid.(int), req.Name); err != nil {
+		if appErr, ok := err.(*common.AppError); ok {
+			common.Error(c, appErr.Code, appErr.Message)
+		} else {
+			common.Error(c, common.CodeInternalError, "更新用户名失败")
+		}
+		return
+	}
+
+	common.Success(c, gin.H{"message": "更新用户名成功"})
+}
+
+// UpdateEmail 更新邮箱
+// @Summary 更新邮箱
+// @Tags User
+// @Accept json
+// @Produce json
+// @Param request body UpdateEmailRequest true "更新邮箱请求"
+// @Success 200 {object} gin.H
+// @Router /update-email [post]
+func (h *Handler) UpdateEmail(c *gin.Context) {
+	uid, exists := c.Get("uid")
+	if !exists {
+		common.Error(c, common.CodeUnauthorized, "未授权")
+		return
+	}
+
+	var req UpdateEmailRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.Error(c, common.CodeInvalidParams, err.Error())
+		return
+	}
+
+	if err := h.service.UpdateEmail(c.Request.Context(), uid.(int), req.Email, req.Captcha); err != nil {
+		if err == ErrInvalidCaptcha {
+			common.Error(c, common.CodeCaptchaInvalid, err.Error())
+		} else if err == ErrEmailAlreadyExists {
+			common.Error(c, common.CodeUserAlreadyExists, err.Error())
+		} else if appErr, ok := err.(*common.AppError); ok {
+			common.Error(c, appErr.Code, appErr.Message)
+		} else {
+			common.Error(c, common.CodeInternalError, "更新邮箱失败")
+		}
+		return
+	}
+
+	common.Success(c, gin.H{"message": "更新邮箱成功"})
 }

@@ -44,6 +44,11 @@ type Service interface {
 	BindJwc(ctx context.Context, uid int, sid, spwd string) error
 	// CheckIsBind 检查是否绑定教务处
 	CheckIsBind(ctx context.Context, uid int) (bool, error)
+
+	// UpdateName 更新用户名
+	UpdateName(ctx context.Context, uid int, name string) error
+	// UpdateEmail 更新邮箱（需要验证码）
+	UpdateEmail(ctx context.Context, uid int, email, captcha string) error
 }
 
 // userService 用户服务实现
@@ -445,4 +450,52 @@ func (s *userService) updateWeChatLoginInfo(ctx context.Context, uid int, wxInfo
 	bind.UpdatedAt = time.Now()
 
 	return s.repo.UpdateWeChatBind(ctx, bind)
+}
+
+// UpdateName 更新用户名
+func (s *userService) UpdateName(ctx context.Context, uid int, name string) error {
+	if name == "" {
+		return ErrEmptyParams
+	}
+
+	// 获取用户
+	user, err := s.repo.FindByID(ctx, uid)
+	if err != nil {
+		return err
+	}
+
+	// 更新用户名
+	user.Name = name
+	return s.repo.Update(ctx, user)
+}
+
+// UpdateEmail 更新邮箱（需要验证码）
+func (s *userService) UpdateEmail(ctx context.Context, uid int, email, captcha string) error {
+	if email == "" {
+		return ErrEmptyParams
+	}
+
+	// 验证验证码
+	if err := s.captchaService.VerifyEmailCaptcha(ctx, email, captcha); err != nil {
+		return ErrInvalidCaptcha
+	}
+
+	// 检查新邮箱是否已被使用
+	existingUser, err := s.repo.FindByEmail(ctx, email)
+	if err != nil && !errors.Is(err, ErrUserNotFound) {
+		return err
+	}
+	if existingUser != nil && existingUser.Uid != uid {
+		return ErrEmailAlreadyExists
+	}
+
+	// 获取当前用户
+	user, err := s.repo.FindByID(ctx, uid)
+	if err != nil {
+		return err
+	}
+
+	// 更新邮箱
+	user.Email = email
+	return s.repo.Update(ctx, user)
 }

@@ -270,6 +270,7 @@ func (s *gradeService) parseGradesFromHTML(r io.Reader) ([]Grade, error) {
 		score := trim(tds.Eq(4).Text())
 		credit := parseFloatSafe(trim(tds.Eq(5).Text()))
 		gpa := parseFloatSafe(trim(tds.Eq(7).Text()))
+		flag := trim(tds.Eq(8).Text()) // 成绩标志（缓考等）
 
 		// 处理 status
 		statusNormalRegexp := regexp.MustCompile(`^正常考试$|.*重.*`)
@@ -296,6 +297,7 @@ func (s *gradeService) parseGradesFromHTML(r io.Reader) ([]Grade, error) {
 			Gpa:      gpa,
 			Status:   status,
 			Property: property,
+			Flag:     flag,
 		})
 	})
 
@@ -368,6 +370,11 @@ func (s *gradeService) calculateGPA(gradeArray []Grade) *GPA {
 
 	for _, g := range distinct {
 		if g.Property != "必修" {
+			continue
+		}
+
+		// 跳过缓考成绩，不计入GPA计算
+		if g.Flag == "缓考" {
 			continue
 		}
 
@@ -462,7 +469,17 @@ func (s *gradeService) distinctGrades(grades []Grade) []Grade {
 	m := make(map[string]Grade)
 	for _, g := range grades {
 		key := g.SerialNo + "|" + g.Code + "|" + g.Term
-		m[key] = g
+
+		// 如果key已存在，优先保留非缓考的成绩
+		if existing, exists := m[key]; exists {
+			// 如果现有记录是缓考，但新记录不是，则替换
+			if existing.Flag == "缓考" && g.Flag != "缓考" {
+				m[key] = g
+			}
+			// 否则保留现有记录（包括：现有不是缓考，或两者都是缓考，或两者都不是缓考）
+		} else {
+			m[key] = g
+		}
 	}
 	res := make([]Grade, 0, len(m))
 	for _, g := range m {

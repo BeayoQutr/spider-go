@@ -11,7 +11,8 @@
       "Bash(timeout 2 ./spider-go.exe)",
       "Bash(go build -o spider-go.exe)",
       "Bash(go run main.go)",
-      "Bash(cat config/config.yaml)"
+      "Bash(cat config/config.yaml)",
+      "Bash(cat:*)"
     ],
     "deny": [],
     "ask": []

@@ -74,6 +74,17 @@ type WeChatLoginRequest struct {
 	Code string `json:"code" binding:"required"` // 微信授权code
 }
 
+// UpdateNameRequest 更新用户名请求
+type UpdateNameRequest struct {
+	Name string `json:"name" binding:"required"`
+}
+
+// UpdateEmailRequest 更新邮箱请求
+type UpdateEmailRequest struct {
+	Email   string `json:"email" binding:"required,email"`
+	Captcha string `json:"captcha" binding:"required"`
+}
+
 // UserResponse 用户响应（不包含敏感信息）
 type UserResponse struct {
 	Uid       int       `json:"uid"`
