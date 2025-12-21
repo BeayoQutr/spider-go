@@ -5,11 +5,11 @@ import "time"
 // Admin 管理员模型
 type Admin struct {
 	Uid       int       `gorm:"primaryKey;autoIncrement" json:"uid"`
-	Email     string    `gorm:"unique;not null" json:"email"`
-	Name      string    `json:"name"`
-	Password  string    `json:"-"` // 不序列化
+	Email     string    `gorm:"type:varchar(255);unique;not null" json:"email"`
+	Name      string    `gorm:"type:varchar(255)" json:"name"`
+	Password  string    `gorm:"type:varchar(255)" json:"-"` // 不序列化
 	CreatedAt time.Time `json:"created_at"`
-	Avatar    string    `json:"avatar"`
+	Avatar    string    `gorm:"type:varchar(500)" json:"avatar"`
 }
 
 // TableName 指定表名

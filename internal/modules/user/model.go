@@ -5,13 +5,13 @@ import "time"
 // User 用户模型
 type User struct {
 	Uid                    int                   `gorm:"primary_key;AUTO_INCREMENT" json:"uid"`
-	Email                  string                `gorm:"unique;index" json:"email"`
-	Name                   string                `json:"name"`
-	Password               string                `json:"-"`   // 不序列化
-	Sid                    string                `json:"sid"` // 学号
-	Spwd                   string                `json:"-"`   // 教务系统密码（不序列化）
+	Email                  string                `gorm:"type:varchar(255);unique;index" json:"email"`
+	Name                   string                `gorm:"type:varchar(255)" json:"name"`
+	Password               string                `gorm:"type:varchar(255)" json:"-"`  // 不序列化
+	Sid                    string                `gorm:"type:varchar(50)" json:"sid"` // 学号
+	Spwd                   string                `gorm:"type:varchar(255)" json:"-"`  // 教务系统密码（不序列化）
 	CreatedAt              time.Time             `json:"created_at"`
-	Avatar                 string                `json:"avatar"`
+	Avatar                 string                `gorm:"type:varchar(500)" json:"avatar"`
 	WeChatMiniProgramBinds UserWeChatMiniProgram `gorm:"foreignKey:Uid" json:"-"` // HasMany 关系
 }
 

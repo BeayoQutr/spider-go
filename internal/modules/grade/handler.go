@@ -101,7 +101,7 @@ func (h *Handler) GetLevelGrades(c *gin.Context) {
 // GetGradesAnalysis 获取成绩分析
 // @Summary 获取最近三个学期的成绩分析
 // @Tags Grade
-// @Produce json
+// @Produce JSON
 // @Success 200 {object} TermsGradesAnalysis
 // @Router /grades/analysis [get]
 func (h *Handler) GetGradesAnalysis(c *gin.Context) {

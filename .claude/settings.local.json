@@ -12,7 +12,8 @@
       "Bash(go build -o spider-go.exe)",
       "Bash(go run main.go)",
       "Bash(cat config/config.yaml)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(go build -ldflags=\"-s -w\" -o spider-go-production.exe)"
     ],
     "deny": [],
     "ask": []

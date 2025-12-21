@@ -63,14 +63,20 @@ func (h *Handler) SetCurrentTerm(c *gin.Context) {
 // @Summary 获取学期日期
 // @Tags 配置管理
 // @Produce json
-// @Param term query string true "学期（格式：2024-2025-1）"
+// @Param term query string false "学期（格式：2024-2025-1）,不传则返回当前学期"
 // @Success 200 {object} common.Response{data=SemesterDatesResponse}
 // @Router /api/config/semester-dates [get]
 func (h *Handler) GetSemesterDates(c *gin.Context) {
 	term := c.Query("term")
+
+	// 如果没有传入term参数，使用当前学期
 	if term == "" {
-		common.ErrorWithAppError(c, common.NewAppError(common.CodeInvalidParams, "学期参数不能为空"))
-		return
+		currentTerm, err := h.service.GetCurrentTerm(c.Request.Context())
+		if err != nil {
+			common.ErrorWithAppError(c, err.(*common.AppError))
+			return
+		}
+		term = currentTerm
 	}
 
 	startDate, endDate, err := h.service.GetSemesterDates(c.Request.Context(), term)
