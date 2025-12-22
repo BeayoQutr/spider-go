@@ -71,7 +71,7 @@ func (s *courseService) GetCourseTableByWeek(ctx context.Context, uid int, week 
 	}
 
 	if user.Sid == "" || user.Spwd == "" {
-		return nil, common.NewAppError(common.CodeJwcNotBound, "")
+		return nil, common.NewAppError(common.CodeJwcNotBound, "未绑定教务系统账号")
 	}
 
 	// 先查询缓存

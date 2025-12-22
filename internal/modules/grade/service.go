@@ -69,7 +69,7 @@ func (s *gradeService) GetAllGrades(ctx context.Context, uid int) ([]Grade, *GPA
 	}
 
 	if user.Sid == "" || user.Spwd == "" {
-		return nil, nil, common.NewAppError(common.CodeJwcNotBound, "")
+		return nil, nil, common.NewAppError(common.CodeJwcNotBound, "未绑定教务系统账号")
 	}
 
 	// 先查询缓存
@@ -136,7 +136,7 @@ func (s *gradeService) GetGradesByTerm(ctx context.Context, uid int, term string
 	}
 
 	if user.Sid == "" || user.Spwd == "" {
-		return nil, nil, common.NewAppError(common.CodeJwcNotBound, "")
+		return nil, nil, common.NewAppError(common.CodeJwcNotBound, "未绑定教务系统账号")
 	}
 
 	// 先查询缓存
@@ -197,7 +197,7 @@ func (s *gradeService) GetLevelGrades(ctx context.Context, uid int) ([]LevelGrad
 	}
 
 	if user.Sid == "" || user.Spwd == "" {
-		return nil, common.NewAppError(common.CodeJwcNotBound, "")
+		return nil, common.NewAppError(common.CodeJwcNotBound, "未绑定教务系统账号")
 	}
 
 	// 获取会话

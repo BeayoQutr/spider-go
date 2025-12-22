@@ -35,6 +35,7 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 // @Param term query string false "学期" example(2024-2025-1)
 // @Success 200 {object} GradesResponse
 // @Router /grades [get]
+// TODO 根据学年获得成绩
 func (h *Handler) GetGrades(c *gin.Context) {
 	uid, ok := c.Get("uid")
 	if !ok {
