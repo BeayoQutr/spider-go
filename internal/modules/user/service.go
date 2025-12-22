@@ -220,8 +220,7 @@ func (s *userService) BindJwc(ctx context.Context, uid int, sid, spwd string) er
 	hasUpper := regexp.MustCompile(`[A-Z]`).MatchString(spwd)
 	hasLower := regexp.MustCompile(`[a-z]`).MatchString(spwd)
 	hasDigit := regexp.MustCompile(`\d`).MatchString(spwd)
-	hasSymbol := regexp.MustCompile(`[^A-Za-z0-9]`).MatchString(spwd)
-	if !(hasUpper && hasLower && hasDigit && hasSymbol) {
+	if !(hasUpper && hasLower && hasDigit) {
 		return common.NewAppError(common.CodeInvalidParams, "请绑定i中南林APP账号")
 	}
 

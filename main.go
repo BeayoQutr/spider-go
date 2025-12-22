@@ -83,8 +83,13 @@ func initScheduler(container *app.Container) *scheduler.Scheduler {
 	// 添加 RSA 公钥刷新任务
 	s.AddTask(tasks.NewRSARefreshTask(container.RSAKeyService))
 
-	// 添加数据预热任务（暂时禁用）
-	s.AddTask(tasks.NewDataPrewarmTask())
+	// 添加数据预热任务
+	s.AddTask(tasks.NewDataPrewarmTask(
+		container.UserQuery,
+		container.GradeModule.GetService(),
+		container.CourseModule.GetService(),
+		container.ExamModule.GetService(),
+	))
 
 	return s
 }

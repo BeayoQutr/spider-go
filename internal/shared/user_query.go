@@ -31,6 +31,8 @@ type UserQuery interface {
 	GetUserByUid(ctx context.Context, uid int) (*UserInfo, error)
 	// GetAllUserEmails 获取所有用户的邮箱
 	GetAllUserEmails(ctx context.Context) ([]string, error)
+	// GetAllBoundUsers 获取所有已绑定教务系统的用户
+	GetAllBoundUsers(ctx context.Context) ([]UserInfo, error)
 }
 
 // userQuery 用户查询实现
@@ -63,4 +65,17 @@ func (q *userQuery) GetAllUserEmails(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	return emails, nil
+}
+
+// GetAllBoundUsers 获取所有已绑定教务系统的用户
+func (q *userQuery) GetAllBoundUsers(ctx context.Context) ([]UserInfo, error) {
+	var users []UserInfo
+	err := q.db.WithContext(ctx).
+		Where("sid != ? AND sid IS NOT NULL", "").
+		Where("spwd != ? AND spwd IS NOT NULL", "").
+		Find(&users).Error
+	if err != nil {
+		return nil, err
+	}
+	return users, nil
 }

@@ -70,10 +70,42 @@ func (s *evaluationService) GetEvaluationInfo(ctx context.Context, uid int) (*[]
 	}
 	defer body.Close()
 
-	// TODO: 解析响应
-	fmt.Println(body)
+	// 解析响应
+	bodyBytes, err := io.ReadAll(body)
+	if err != nil {
+		return nil, common.NewAppError(common.CodeJwcParseFailed, "读取响应失败")
+	}
 
-	return nil, common.NewAppError(common.CodeNotImplemented, "功能未实现")
+	var apiResp EvaluationAPIResponse
+	if err := json.Unmarshal(bodyBytes, &apiResp); err != nil {
+		return nil, common.NewAppError(common.CodeJwcParseFailed, "解析教评响应失败")
+	}
+
+	if apiResp.Code != 200 {
+		return nil, common.NewAppError(common.CodeJwcRequestFailed, fmt.Sprintf("教评系统返回错误: %s", apiResp.Msg))
+	}
+
+	// 转换为统一格式
+	result := make([]EvaluationInfo, 0, len(apiResp.Data.List))
+	for _, item := range apiResp.Data.List {
+		status := "未评"
+		if item.Status == 1 {
+			status = "已评"
+		}
+
+		result = append(result, EvaluationInfo{
+			TaskId:       item.TaskId,
+			TaskName:     item.TaskName,
+			CourseName:   item.CourseName,
+			TeacherName:  item.TeacherName,
+			Status:       status,
+			EvaluateType: item.EvaluateType,
+			BeginTime:    item.BeginTime,
+			EndTime:      item.EndTime,
+		})
+	}
+
+	return &result, nil
 }
 
 // LoginAndCacheEvaluation 登录教评系统并缓存 accessToken
