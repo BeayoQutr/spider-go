@@ -32,10 +32,10 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 // @Summary 获取成绩
 // @Tags Grade
 // @Produce json
-// @Param term query string false "学期" example(2024-2025-1)
+// @Param term query string false "学期，格式：2024-2025-1"
+// @Param year query string false "学年，格式：2024-2025"
 // @Success 200 {object} GradesResponse
 // @Router /grades [get]
-// TODO 根据学年获得成绩
 func (h *Handler) GetGrades(c *gin.Context) {
 	uid, ok := c.Get("uid")
 	if !ok {
@@ -43,15 +43,20 @@ func (h *Handler) GetGrades(c *gin.Context) {
 		return
 	}
 
-	// 从 query params 获取学期参数
+	// 从 query params 获取学期或学年参数
 	term := c.Query("term")
+	year := c.Query("year")
 
 	var grades []Grade
 	var gpa *GPA
 	var err error
 
-	if term != "" {
-		// 查询指定学期的成绩
+	// 优先级：year > term > all
+	if year != "" {
+		// 学年查询
+		grades, gpa, err = h.service.GetGradesByYear(c.Request.Context(), uid.(int), year)
+	} else if term != "" {
+		// 学期查询
 		grades, gpa, err = h.service.GetGradesByTerm(c.Request.Context(), uid.(int), term)
 	} else {
 		// 查询所有成绩

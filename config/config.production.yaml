@@ -86,3 +86,46 @@ email:
   password: "kwxuotnueozvdjeb"
   from_name: "Spider-Go 验证码"
 
+wx:
+  app_id: "wx9a4655cca1fa3f42"
+  app_secret: ""
+
+# 对象存储配置
+oss:
+  # 存储服务提供商: aliyun (阿里云 OSS) 或 tencent (腾讯云 COS)
+  provider: "aliyun"
+
+  # 阿里云 OSS 配置
+  aliyun:
+    endpoint: "oss-cn-hangzhou.aliyuncs.com"  # OSS 访问域名
+    access_key_id: "your_aliyun_access_key_id"
+    access_key_secret: "your_aliyun_access_key_secret"
+    bucket_name: "spider-go-prod"
+    base_url: "https://spider-go-prod.oss-cn-hangzhou.aliyuncs.com"  # 文件访问的基础 URL
+    use_cdn: true  # 是否使用 CDN 加速域名
+    cdn_domain: "https://cdn.starrykira.xyz"  # CDN 加速域名（如果启用）
+
+  # 腾讯云 COS 配置
+  tencent:
+    region: "ap-guangzhou"  # COS 区域
+    secret_id: "your_tencent_secret_id"
+    secret_key: "your_tencent_secret_key"
+    bucket_name: "spider-go-prod-1234567890"  # 格式: BucketName-APPID
+    base_url: "https://spider-go-prod-1234567890.cos.ap-guangzhou.myqcloud.com"  # 文件访问的基础 URL
+    use_cdn: true  # 是否使用 CDN 加速域名
+    cdn_domain: "https://cdn.starrykira.xyz"  # CDN 加速域名（如果启用）
+
+  # 通用配置
+  upload_path: "uploads/"  # 上传文件的根路径
+  max_file_size: 10485760  # 最大文件大小（字节），默认 10MB
+  allowed_extensions:  # 允许上传的文件扩展名
+    - ".jpg"
+    - ".jpeg"
+    - ".png"
+    - ".gif"
+    - ".pdf"
+    - ".doc"
+    - ".docx"
+    - ".xls"
+    - ".xlsx"
+

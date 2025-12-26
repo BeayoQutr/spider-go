@@ -23,6 +23,7 @@ import (
 type Service interface {
 	GetAllGrades(ctx context.Context, uid int) ([]Grade, *GPA, error)
 	GetGradesByTerm(ctx context.Context, uid int, term string) ([]Grade, *GPA, error)
+	GetGradesByYear(ctx context.Context, uid int, year string) ([]Grade, *GPA, error)
 	GetLevelGrades(ctx context.Context, uid int) ([]LevelGrade, error)
 	// 成绩分析接口
 	GetRecentTermsGrades(ctx context.Context, uid int) (*TermsGradesAnalysis, error)
@@ -186,6 +187,95 @@ func (s *gradeService) GetGradesByTerm(ctx context.Context, uid int, term string
 	_ = s.userDataCache.CacheGrades(ctx, uid, term, data, time.Hour)
 
 	return gradeList, gpa, nil
+}
+
+// GetGradesByYear 根据学年获取成绩
+func (s *gradeService) GetGradesByYear(ctx context.Context, uid int, year string) ([]Grade, *GPA, error) {
+	// 校验参数格式：2023-2024
+	re := regexp.MustCompile(`^\d{4}-\d{4}$`)
+	if !re.MatchString(year) {
+		return nil, nil, common.NewAppError(common.CodeJwcInvalidParams, "学年格式错误")
+	}
+
+	// 获取用户信息
+	user, err := s.userQuery.GetUserByUid(ctx, uid)
+	if err != nil {
+		return nil, nil, common.NewAppError(common.CodeUserNotFound, "用户不存在")
+	}
+
+	if user.Sid == "" || user.Spwd == "" {
+		return nil, nil, common.NewAppError(common.CodeJwcNotBound, "未绑定教务系统账号")
+	}
+
+	// 先查询缓存
+	type GradeData struct {
+		Grades []Grade `json:"grades"`
+		GPA    *GPA    `json:"gpa"`
+	}
+	var cachedData GradeData
+	cacheKey := year // 使用学年作为缓存键
+	if err := s.userDataCache.GetGrades(ctx, uid, cacheKey, &cachedData); err == nil {
+		return cachedData.Grades, cachedData.GPA, nil
+	}
+
+	// 构造两个学期的标识
+	term1 := year + "-1"
+	term2 := year + "-2"
+
+	// 获取会话
+	cookies, err := s.getCookiesOrLogin(ctx, uid, user.Sid, user.Spwd)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// 获取第一学期成绩
+	form1 := url.Values{}
+	form1.Set("kksj", term1)
+	form1.Set("kcxz", "")
+	form1.Set("kcmc", "")
+	form1.Set("xsfs", "all")
+
+	body1, err := s.crawlerService.FetchWithCookies(ctx, "POST", s.gradeURL, cookies, form1)
+	if err != nil {
+		return nil, nil, err
+	}
+	gradeList1, err := s.parseGradesFromHTML(body1)
+	body1.Close()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// 获取第二学期成绩
+	form2 := url.Values{}
+	form2.Set("kksj", term2)
+	form2.Set("kcxz", "")
+	form2.Set("kcmc", "")
+	form2.Set("xsfs", "all")
+
+	body2, err := s.crawlerService.FetchWithCookies(ctx, "POST", s.gradeURL, cookies, form2)
+	if err != nil {
+		return nil, nil, err
+	}
+	gradeList2, err := s.parseGradesFromHTML(body2)
+	body2.Close()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// 合并两个学期的成绩
+	allGrades := append(gradeList1, gradeList2...)
+
+	// 计算学年 GPA（使用相同的计算方法）
+	gpa := s.calculateGPA(allGrades)
+
+	// 写入缓存（1小时过期）
+	data := GradeData{
+		Grades: allGrades,
+		GPA:    gpa,
+	}
+	_ = s.userDataCache.CacheGrades(ctx, uid, cacheKey, data, time.Hour)
+
+	return allGrades, gpa, nil
 }
 
 // GetLevelGrades 获取等级考试成绩

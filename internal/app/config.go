@@ -16,6 +16,7 @@ type Config struct {
 	JWT      JWTConfig          `yaml:"jwt" mapstructure:"jwt"`
 	Email    EmailConfig        `yaml:"email" mapstructure:"email"`
 	Wx       WxConfig           `yaml:"wx" mapstructure:"wx"`
+	OSS      OSSConfig          `yaml:"oss" mapstructure:"oss"`
 }
 
 type Appconfig struct {
@@ -103,6 +104,79 @@ type RedisClusterConfig struct {
 type WxConfig struct {
 	AppId     string `yaml:"app_id" mapstructure:"app_id"`
 	AppSecret string `yaml:"app_secret" mapstructure:"app_secret"`
+}
+
+// OSSConfig 对象存储配置
+type OSSConfig struct {
+	Provider string           `yaml:"provider" mapstructure:"provider"` // 存储服务提供商: aliyun, tencent
+	Aliyun   AliyunOSSConfig  `yaml:"aliyun" mapstructure:"aliyun"`     // 阿里云 OSS 配置
+	Tencent  TencentCOSConfig `yaml:"tencent" mapstructure:"tencent"`   // 腾讯云 COS 配置
+
+	// 通用配置
+	UploadPath        string   `yaml:"upload_path" mapstructure:"upload_path"`               // 上传文件的根路径
+	MaxFileSize       int64    `yaml:"max_file_size" mapstructure:"max_file_size"`           // 最大文件大小（字节）
+	AllowedExtensions []string `yaml:"allowed_extensions" mapstructure:"allowed_extensions"` // 允许上传的文件扩展名
+}
+
+// AliyunOSSConfig 阿里云 OSS 配置
+type AliyunOSSConfig struct {
+	Endpoint        string `yaml:"endpoint" mapstructure:"endpoint"`                   // OSS 访问域名
+	AccessKeyID     string `yaml:"access_key_id" mapstructure:"access_key_id"`         // AccessKey ID
+	AccessKeySecret string `yaml:"access_key_secret" mapstructure:"access_key_secret"` // AccessKey Secret
+	BucketName      string `yaml:"bucket_name" mapstructure:"bucket_name"`             // 存储桶名称
+	BaseURL         string `yaml:"base_url" mapstructure:"base_url"`                   // 文件访问的基础 URL
+	UseCDN          bool   `yaml:"use_cdn" mapstructure:"use_cdn"`                     // 是否使用 CDN 加速域名
+	CDNDomain       string `yaml:"cdn_domain" mapstructure:"cdn_domain"`               // CDN 加速域名
+}
+
+// TencentCOSConfig 腾讯云 COS 配置
+type TencentCOSConfig struct {
+	Region     string `yaml:"region" mapstructure:"region"`           // COS 区域
+	SecretID   string `yaml:"secret_id" mapstructure:"secret_id"`     // SecretId
+	SecretKey  string `yaml:"secret_key" mapstructure:"secret_key"`   // SecretKey
+	BucketName string `yaml:"bucket_name" mapstructure:"bucket_name"` // 存储桶名称（格式: BucketName-APPID）
+	BaseURL    string `yaml:"base_url" mapstructure:"base_url"`       // 文件访问的基础 URL
+	UseCDN     bool   `yaml:"use_cdn" mapstructure:"use_cdn"`         // 是否使用 CDN 加速域名
+	CDNDomain  string `yaml:"cdn_domain" mapstructure:"cdn_domain"`   // CDN 加速域名
+}
+
+// GetCurrentProvider  根据 provider 返回当前使用的 OSS 配置信息
+// 返回 endpoint/region, bucketName, baseURL, useCDN, cdnDomain
+func (c *OSSConfig) GetCurrentProvider() string {
+	return c.Provider
+}
+
+// IsAliyun 是否使用阿里云 OSS
+func (c *OSSConfig) IsAliyun() bool {
+	return c.Provider == "aliyun"
+}
+
+// IsTencent 是否使用腾讯云 COS
+func (c *OSSConfig) IsTencent() bool {
+	return c.Provider == "tencent"
+}
+
+// GetFileURL 根据配置返回文件的完整访问 URL
+func (c *OSSConfig) GetFileURL(objectKey string) string {
+	var baseURL string
+	var useCDN bool
+	var cdnDomain string
+
+	if c.IsAliyun() {
+		baseURL = c.Aliyun.BaseURL
+		useCDN = c.Aliyun.UseCDN
+		cdnDomain = c.Aliyun.CDNDomain
+	} else if c.IsTencent() {
+		baseURL = c.Tencent.BaseURL
+		useCDN = c.Tencent.UseCDN
+		cdnDomain = c.Tencent.CDNDomain
+	}
+
+	if useCDN && cdnDomain != "" {
+		return fmt.Sprintf("%s/%s", cdnDomain, objectKey)
+	}
+
+	return fmt.Sprintf("%s/%s", baseURL, objectKey)
 }
 
 var Conf *Config
