@@ -52,7 +52,7 @@ jwt:
 
 jwc:
   # 登录模式：campus（校园网内） 或 webvpn（外网 WebVPN）
-  mode: "webvpn"  # 生产环境默认使用 webvpn 模式
+  mode: "campus"  # 生产环境默认使用 webvpn 模式
 
   # 校园网内配置
   campus:

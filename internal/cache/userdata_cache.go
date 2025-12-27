@@ -25,6 +25,10 @@ type UserDataCache interface {
 	CacheExams(ctx context.Context, uid int, term string, data interface{}, expiration time.Duration) error
 	// GetExams 获取考试安排缓存
 	GetExams(ctx context.Context, uid int, term string, target interface{}) error
+	// CacheRegularGrades 缓存平时成绩
+	CacheRegularGrades(ctx context.Context, uid int, term string, data interface{}, expiration time.Duration) error
+	// GetRegularGrades 获取平时成绩
+	GetRegularGrades(ctx context.Context, uid int, term string, target interface{}) error
 }
 
 // RedisUserDataCache Redis 实现的用户数据缓存
@@ -99,6 +103,49 @@ func (c *RedisUserDataCache) GetExams(ctx context.Context, uid int, term string,
 	return json.Unmarshal(bytes, target)
 }
 
+// CacheRegularGrades 缓存平时成绩 (使用 Hash 存储)
+func (c *RedisUserDataCache) CacheRegularGrades(ctx context.Context, uid int, term string, data interface{}, expiration time.Duration) error {
+	key := c.getRegularGradesKey(uid, term)
+
+	// 将 data 转换为 map[string]interface{}
+	dataMap, ok := data.(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("data must be map[string]interface{}")
+	}
+
+	// 使用 HSet 存储哈希表
+	if err := c.client.HSet(ctx, key, dataMap).Err(); err != nil {
+		return err
+	}
+
+	// 设置过期时间
+	return c.client.Expire(ctx, key, expiration).Err()
+}
+
+// GetRegularGrades 获取平时成绩缓存
+func (c *RedisUserDataCache) GetRegularGrades(ctx context.Context, uid int, term string, target interface{}) error {
+	key := c.getRegularGradesKey(uid, term)
+
+	// 获取整个哈希表
+	result, err := c.client.HGetAll(ctx, key).Result()
+	if err != nil {
+		return err
+	}
+
+	// 检查是否为空
+	if len(result) == 0 {
+		return redis.Nil
+	}
+
+	// 将 result 转换为 target 类型
+	bytes, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
+
+	return json.Unmarshal(bytes, target)
+}
+
 // 键生成辅助方法
 func (c *RedisUserDataCache) getGradesKey(uid int, term string) string {
 	if term == "" {
@@ -113,4 +160,11 @@ func (c *RedisUserDataCache) getCourseKey(uid int, term string, week int) string
 
 func (c *RedisUserDataCache) getExamKey(uid int, term string) string {
 	return fmt.Sprintf("data:exam:%d:%s", uid, term)
+}
+
+func (c *RedisUserDataCache) getRegularGradesKey(uid int, term string) string {
+	if term == "" {
+		return fmt.Sprintf("data:regular:%d:all", uid)
+	}
+	return fmt.Sprintf("data:regular:%d:%s", uid, term)
 }

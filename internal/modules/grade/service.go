@@ -103,11 +103,20 @@ func (s *gradeService) GetAllGrades(ctx context.Context, uid int) ([]Grade, *GPA
 	}
 	defer body.Close()
 
-	// 解析成绩
-	gradeList, err := s.parseGradesFromHTML(body)
+	// 读取HTML内容用于提取平时分链接
+	htmlBytes, err := io.ReadAll(body)
 	if err != nil {
 		return nil, nil, err
 	}
+
+	// 解析成绩
+	gradeList, err := s.parseGradesFromHTML(strings.NewReader(string(htmlBytes)))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// 提取并缓存平时分链接
+	s.extractAndCacheRegularGradeLinks(ctx, uid, "", string(htmlBytes))
 
 	// 计算 GPA
 	gpa := s.calculateGPA(gradeList)
@@ -170,11 +179,20 @@ func (s *gradeService) GetGradesByTerm(ctx context.Context, uid int, term string
 	}
 	defer body.Close()
 
-	// 解析成绩
-	gradeList, err := s.parseGradesFromHTML(body)
+	// 读取HTML内容用于提取平时分链接
+	htmlBytes, err := io.ReadAll(body)
 	if err != nil {
 		return nil, nil, err
 	}
+
+	// 解析成绩
+	gradeList, err := s.parseGradesFromHTML(strings.NewReader(string(htmlBytes)))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// 提取并缓存平时分链接
+	s.extractAndCacheRegularGradeLinks(ctx, uid, term, string(htmlBytes))
 
 	// 计算 GPA
 	gpa := s.calculateGPA(gradeList)
@@ -239,11 +257,21 @@ func (s *gradeService) GetGradesByYear(ctx context.Context, uid int, year string
 	if err != nil {
 		return nil, nil, err
 	}
-	gradeList1, err := s.parseGradesFromHTML(body1)
+
+	// 读取第一学期HTML内容
+	htmlBytes1, err := io.ReadAll(body1)
 	body1.Close()
 	if err != nil {
 		return nil, nil, err
 	}
+
+	gradeList1, err := s.parseGradesFromHTML(strings.NewReader(string(htmlBytes1)))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// 提取并缓存第一学期的平时分链接
+	s.extractAndCacheRegularGradeLinks(ctx, uid, term1, string(htmlBytes1))
 
 	// 获取第二学期成绩
 	form2 := url.Values{}
@@ -256,11 +284,21 @@ func (s *gradeService) GetGradesByYear(ctx context.Context, uid int, year string
 	if err != nil {
 		return nil, nil, err
 	}
-	gradeList2, err := s.parseGradesFromHTML(body2)
+
+	// 读取第二学期HTML内容
+	htmlBytes2, err := io.ReadAll(body2)
 	body2.Close()
 	if err != nil {
 		return nil, nil, err
 	}
+
+	gradeList2, err := s.parseGradesFromHTML(strings.NewReader(string(htmlBytes2)))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// 提取并缓存第二学期的平时分链接
+	s.extractAndCacheRegularGradeLinks(ctx, uid, term2, string(htmlBytes2))
 
 	// 合并两个学期的成绩
 	allGrades := append(gradeList1, gradeList2...)
@@ -459,6 +497,7 @@ func (s *gradeService) calculateGPA(gradeArray []Grade) *GPA {
 	)
 
 	for _, g := range distinct {
+		//只算必修
 		if g.Property != "必修" {
 			continue
 		}
@@ -805,4 +844,54 @@ func (s *gradeService) analyzeTrend(termsData []TermGradesData) *TrendAnalysis {
 		WorstTerm:    worstTerm,
 		WorstTermGPA: worstGPA,
 	}
+}
+
+// extractAndCacheRegularGradeLinks 从HTML中提取平时分链接并缓存到Redis Hash
+func (s *gradeService) extractAndCacheRegularGradeLinks(ctx context.Context, uid int, term string, htmlContent string) {
+	regularGradeLinks := make(map[string]interface{})
+
+	// 正则提取: 课程编号和平时分链接
+	// HTML结构:
+	// <tr class="aaaaDel" style="visibility:hidden;">
+	//   <td>...</td>
+	//   <td>2025-2026-1</td>
+	//   <td align="left" style="width: 110px;">230090475</td>  <- 课程编号
+	//   <td>...</td>
+	//   <!-- <td>...<a href="/jsxsd/kscj/pscj_list.do?...">...</a></td> --> <- 平时分链接在注释中
+	//   ...
+	// </tr>
+
+	// 提取所有隐藏的tr标签内容 (包含注释)
+	trRegex := regexp.MustCompile(`(?s)<tr[^>]*class="aaaaDel"[^>]*>.*?</tr>`)
+	trMatches := trRegex.FindAllString(htmlContent, -1)
+
+	// 正则提取课程编号 (第3个td)
+	courseCodeRegex := regexp.MustCompile(`<td align="left"[^>]*>(\d+)</td>`)
+
+	// 正则提取平时分链接 (在HTML注释中)
+	regularLinkRegex := regexp.MustCompile(`/jsxsd/kscj/pscj_list\.do\?[^'">\s]+`)
+
+	for _, trContent := range trMatches {
+		// 提取课程编号
+		codeMatches := courseCodeRegex.FindStringSubmatch(trContent)
+		if len(codeMatches) < 2 {
+			continue
+		}
+		courseCode := codeMatches[1]
+
+		// 提取平时分链接
+		linkMatches := regularLinkRegex.FindStringSubmatch(trContent)
+		if len(linkMatches) > 0 {
+			regularLink := linkMatches[0]
+			regularGradeLinks[courseCode] = regularLink
+		}
+	}
+
+	// 如果没有提取到链接,不执行缓存操作
+	if len(regularGradeLinks) == 0 {
+		return
+	}
+
+	// 缓存到Redis Hash (1小时过期)
+	_ = s.userDataCache.CacheRegularGrades(ctx, uid, term, regularGradeLinks, time.Hour)
 }

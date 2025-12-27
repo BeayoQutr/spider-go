@@ -410,6 +410,8 @@ func (s *jwcSessionService) LoginAndGetClient(ctx context.Context, username, pas
 	// TGC cookie 已在 jar 中，返回 client
 	return client, nil
 }
+
+// LoginCheck 检查账号是否能被教务系统绑定
 func (s *jwcSessionService) LoginCheck(ctx context.Context, username, password string) error {
 	// 创建 cookie jar
 	jar, err := cookiejar.New(&cookiejar.Options{
