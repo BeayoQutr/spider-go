@@ -3,7 +3,7 @@ package grade
 // Grade 成绩信息
 type Grade struct {
 	SerialNo string  `json:"serialNo"` // 序号
-	Term     string  `json:"Year"`     // 学期
+	Term     string  `json:"Term"`     // 学期
 	Code     string  `json:"Code"`     // 课程代码
 	Subject  string  `json:"subject"`  // 课程名称
 	Score    string  `json:"score"`    // 分数
@@ -29,6 +29,15 @@ type LevelGrade struct {
 	Time       string `json:"Time"`       // 考试时间
 }
 
+// RegularGrade 平时分信息
+type RegularGrade struct {
+	FinalExamScore string `json:"FinalExamScore"` //期末考试分数
+	FinalExamRatio string `json:"FinalExamRatio"` //期末成绩占总成绩比例
+	RegularScore   string `json:"RegularScore"`   //平时成绩分数
+	RegularRatio   string `json:"RegularRatio"`   //平时成绩占总成绩比例
+	FinalScore     string `json:"FinalScore"`     //总成绩
+}
+
 // GetGradesRequest 获取成绩请求
 type GetGradesRequest struct {
 	Term string `form:"term"` // 学期（可选），格式：2024-2025-1
@@ -36,8 +45,13 @@ type GetGradesRequest struct {
 
 // GradesResponse 成绩响应
 type GradesResponse struct {
-	Grades []Grade `json:"grades"`
-	GPA    *GPA    `json:"gpa"`
+	Grades []Grade `json:"grades" binding:"required"`
+	GPA    *GPA    `json:"gpa" binding:"required"`
+}
+
+type GetRegularGradesRequest struct {
+	Term string `form:"term"` //学期
+	Code string `form:"code"` //考试号
 }
 
 // TermGradesData 单个学期的成绩数据

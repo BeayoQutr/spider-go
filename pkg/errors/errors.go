@@ -18,6 +18,7 @@ const (
 	CodeJwcLoginFailed    = 40004 // 教务系统登录失败
 	CodeJwcParseFailed    = 40005 // 教务系统解析失败
 	CodeJwcRequestFailed  = 40006 // 教务系统请求失败
+	CodeJwcNoRegularGrade = 40007 // 该课程没有平时分数据
 	CodeCacheError        = 50001 // 缓存错误
 	CodeWeChatLoginFailed = 60001 // 微信登录失败
 	CodeWeChatBindFailed  = 60002 // 微信绑定失败
@@ -34,6 +35,7 @@ const (
 	CodeHttpRequestFailed  = 50010 // HTTP请求失败
 	CodeInvalidResponse    = 50011 // 响应格式错误
 	CodeNotImplemented     = 50100 // 功能未实现
+
 )
 
 // AppError 应用错误

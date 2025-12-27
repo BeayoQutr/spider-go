@@ -25,13 +25,14 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 		grades.GET("", h.GetGrades)                  // 获取成绩（可选term参数）
 		grades.GET("/level", h.GetLevelGrades)       // 获取等级考试成绩
 		grades.GET("/analysis", h.GetGradesAnalysis) // 获取成绩分析
+		grades.POST("/regular", h.GetRegularScore)   // 获取平时分
 	}
 }
 
 // GetGrades 获取成绩
 // @Summary 获取成绩
 // @Tags Grade
-// @Produce json
+// @Produce JSON
 // @Param term query string false "学期，格式：2024-2025-1"
 // @Param year query string false "学年，格式：2024-2025"
 // @Success 200 {object} GradesResponse
@@ -128,4 +129,51 @@ func (h *Handler) GetGradesAnalysis(c *gin.Context) {
 	}
 
 	common.Success(c, analysis)
+}
+
+// GetRegularScore 获取平时分
+// @Summary 获取平时分
+// @Tags Grade
+// @Accept json
+// @Produce json
+// @Param request body GetRegularGradesRequest true "获取平时分请求"
+// @Success 200 {object} RegularGrade
+// @Router /grades/regular [post]
+func (h *Handler) GetRegularScore(c *gin.Context) {
+	uid, ok := c.Get("uid")
+	if !ok {
+		common.Error(c, common.CodeUnauthorized, "未授权")
+		return
+	}
+
+	// 绑定 JSON 请求体
+	var req GetRegularGradesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.Error(c, common.CodeInvalidParams, "请求参数错误")
+		return
+	}
+
+	// 参数校验
+	if req.Term == "" {
+		common.Error(c, common.CodeInvalidParams, "学期参数不能为空")
+		return
+	}
+
+	if req.Code == "" {
+		common.Error(c, common.CodeInvalidParams, "课程编号不能为空")
+		return
+	}
+
+	// 调用 service 获取平时分
+	regularGrade, err := h.service.GetRegularGrades(c.Request.Context(), uid.(int), req.Term, req.Code)
+	if err != nil {
+		if appErr, ok := err.(*common.AppError); ok {
+			common.ErrorWithAppError(c, appErr)
+		} else {
+			common.Error(c, common.CodeInternalError, "获取平时分失败")
+		}
+		return
+	}
+
+	common.Success(c, regularGrade)
 }

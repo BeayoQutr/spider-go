@@ -6,6 +6,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"regexp"
 	"spider-go/internal/cache"
@@ -25,6 +26,7 @@ type Service interface {
 	GetGradesByTerm(ctx context.Context, uid int, term string) ([]Grade, *GPA, error)
 	GetGradesByYear(ctx context.Context, uid int, year string) ([]Grade, *GPA, error)
 	GetLevelGrades(ctx context.Context, uid int) ([]LevelGrade, error)
+	GetRegularGrades(ctx context.Context, uid int, term string, courseId string) (*RegularGrade, error)
 	// 成绩分析接口
 	GetRecentTermsGrades(ctx context.Context, uid int) (*TermsGradesAnalysis, error)
 }
@@ -343,6 +345,57 @@ func (s *gradeService) GetLevelGrades(ctx context.Context, uid int) ([]LevelGrad
 
 	// 解析成绩
 	return s.parseLevelGradesFromHTML(body)
+}
+
+func (s *gradeService) GetRegularGrades(ctx context.Context, uid int, term string, courseId string) (*RegularGrade, error) {
+	// 先从redis数据库里获取平时分链接，没有则返回空
+	// 这个方法要求用户必须先调用过 GetGradesByTerm 或 GetGradesByYear，才能获取到缓存的平时分链接
+	// 这样可以防止爬虫等非法访问
+	link, err := s.getRegularGradeLink(ctx, uid, term, courseId)
+	if err != nil {
+		// 如果缓存不存在，直接返回错误，不再查表和登录
+		return nil, err
+	}
+
+	// 获取会话cookies (从缓存中获取，不需要查数据库)
+	cookies, err := s.sessionService.GetCachedCookies(ctx, uid)
+	if err != nil || len(cookies) == 0 {
+		return nil, common.NewAppError(common.CodeUnauthorized, "会话已过期，请重新获取成绩")
+	}
+
+	// 创建 HTTP 客户端并手动发起请求以获取状态码
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{
+		Jar: jar,
+	}
+
+	// 将 cookies 添加到 jar
+	parsedURL, _ := url.Parse(link)
+	client.Jar.SetCookies(parsedURL, cookies)
+
+	// 发起请求
+	resp, err := client.Get(link)
+	if err != nil {
+		return nil, common.NewAppError(common.CodeJwcRequestFailed, "获取平时分失败")
+	}
+	defer resp.Body.Close()
+
+	// 检查状态码
+	if resp.StatusCode == 404 {
+		return nil, common.NewAppError(common.CodeJwcNoRegularGrade, "该课程没有平时分数据")
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, common.NewAppError(common.CodeJwcRequestFailed, "获取平时分失败")
+	}
+
+	// 解析平时分HTML
+	regularGrade, err := s.parseRegularGradeFromHTML(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	return regularGrade, nil
 }
 
 // getCookiesOrLogin 获取缓存的 cookies 或登录
@@ -894,4 +947,72 @@ func (s *gradeService) extractAndCacheRegularGradeLinks(ctx context.Context, uid
 
 	// 缓存到Redis Hash (1小时过期)
 	_ = s.userDataCache.CacheRegularGrades(ctx, uid, term, regularGradeLinks, time.Hour)
+}
+
+// getRegularGradeLink 根据课程编号获取平时分链接
+// 从Redis Hash中查询指定课程的平时分链接
+func (s *gradeService) getRegularGradeLink(ctx context.Context, uid int, term string, courseCode string) (string, error) {
+	// 从缓存中获取平时分链接映射
+	var regularGradeLinks map[string]string
+	err := s.userDataCache.GetRegularGrades(ctx, uid, term, &regularGradeLinks)
+	if err != nil {
+		return "", common.NewAppError(common.CodeCacheError, "平时分链接缓存不存在")
+	}
+
+	// 查找指定课程编号的链接
+	link, exists := regularGradeLinks[courseCode]
+	if !exists {
+		return "", common.NewAppError(common.CodeJwcNoRegularGrade, "该课程没有平时分数据")
+	}
+	link = "http://jwgl.csuft.edu.cn" + link
+	return link, nil
+}
+
+// parseRegularGradeFromHTML 解析平时分 HTML
+func (s *gradeService) parseRegularGradeFromHTML(r io.Reader) (*RegularGrade, error) {
+	doc, err := goquery.NewDocumentFromReader(r)
+	if err != nil {
+		return nil, common.NewAppError(common.CodeJwcParseFailed, "解析平时分HTML失败")
+	}
+
+	table := doc.Find("#dataList")
+	if table.Length() == 0 {
+		return nil, common.NewAppError(common.CodeJwcParseFailed, "未找到平时分数据")
+	}
+
+	// 查找数据行 (跳过表头)
+	dataRow := table.Find("tr").Eq(1)
+	if dataRow.Length() == 0 {
+		return nil, common.NewAppError(common.CodeJwcParseFailed, "未找到平时分数据行")
+	}
+
+	tds := dataRow.Find("td")
+	if tds.Length() < 5 {
+		return nil, common.NewAppError(common.CodeJwcParseFailed, "平时分数据格式错误")
+	}
+
+	trim := func(s string) string {
+		return strings.TrimSpace(strings.ReplaceAll(s, "\u00A0", ""))
+	}
+
+	// 解析数据
+	// HTML 结构:
+	// <tr>
+	//   <td>1</td>                    <!-- 序号 -->
+	//   <td>100</td>                  <!-- 期末成绩 -->
+	//   <td>40%</td>                  <!-- 期末成绩比例 -->
+	//   <td>69.17</td>                <!-- 平时成绩 -->
+	//   <td>60%</td>                  <!-- 平时成绩比例 -->
+	//   <td>82</td>                   <!-- 总成绩 -->
+	// </tr>
+
+	regularGrade := &RegularGrade{
+		FinalExamScore: trim(tds.Eq(1).Text()),
+		FinalExamRatio: trim(tds.Eq(2).Text()),
+		RegularScore:   trim(tds.Eq(3).Text()),
+		RegularRatio:   trim(tds.Eq(4).Text()),
+		FinalScore:     trim(tds.Eq(5).Text()),
+	}
+
+	return regularGrade, nil
 }
