@@ -50,8 +50,8 @@ type GradesResponse struct {
 }
 
 type GetRegularGradesRequest struct {
-	Term string `form:"term"` //学期
-	Code string `form:"code"` //考试号
+	Term string `json:"term"` //学期
+	Code string `json:"code"` //课程编号
 }
 
 // TermGradesData 单个学期的成绩数据
