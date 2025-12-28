@@ -117,18 +117,21 @@ func (s *gradeService) GetAllGrades(ctx context.Context, uid int) ([]Grade, *GPA
 		return nil, nil, err
 	}
 
-	// 提取并缓存平时分链接
+	// 提取并缓存平时分链接（按学期分别缓存）
 	s.extractAndCacheRegularGradeLinks(ctx, uid, "", string(htmlBytes))
 
-	// 计算 GPA
+	// 计算总 GPA
 	gpa := s.calculateGPA(gradeList)
 
-	// 写入缓存（1小时过期）
+	// 写入总成绩缓存（1小时过期）
 	data := GradeData{
 		Grades: gradeList,
 		GPA:    gpa,
 	}
 	_ = s.userDataCache.CacheGrades(ctx, uid, "", data, time.Hour)
+
+	// 按学期分组并缓存
+	s.cacheGradesByTerm(ctx, uid, gradeList)
 
 	return gradeList, gpa, nil
 }
@@ -901,22 +904,26 @@ func (s *gradeService) analyzeTrend(termsData []TermGradesData) *TrendAnalysis {
 
 // extractAndCacheRegularGradeLinks 从HTML中提取平时分链接并缓存到Redis Hash
 func (s *gradeService) extractAndCacheRegularGradeLinks(ctx context.Context, uid int, term string, htmlContent string) {
-	regularGradeLinks := make(map[string]interface{})
+	// 按学期分组的平时分链接
+	termRegularGradeLinks := make(map[string]map[string]interface{})
 
-	// 正则提取: 课程编号和平时分链接
+	// 正则提取: 课程编号、学期和平时分链接
 	// HTML结构:
 	// <tr class="aaaaDel" style="visibility:hidden;">
 	//   <td>...</td>
-	//   <td>2025-2026-1</td>
-	//   <td align="left" style="width: 110px;">230090475</td>  <- 课程编号
+	//   <td>2025-2026-1</td>                                                    <- 学期
+	//   <td align="left" style="width: 110px;">230090475</td>                  <- 课程编号
 	//   <td>...</td>
-	//   <!-- <td>...<a href="/jsxsd/kscj/pscj_list.do?...">...</a></td> --> <- 平时分链接在注释中
+	//   <!-- <td>...<a href="/jsxsd/kscj/pscj_list.do?...">...</a></td> -->    <- 平时分链接在注释中
 	//   ...
 	// </tr>
 
 	// 提取所有隐藏的tr标签内容 (包含注释)
 	trRegex := regexp.MustCompile(`(?s)<tr[^>]*class="aaaaDel"[^>]*>.*?</tr>`)
 	trMatches := trRegex.FindAllString(htmlContent, -1)
+
+	// 正则提取学期 (第2个td)
+	termRegex := regexp.MustCompile(`<td[^>]*>(\d{4}-\d{4}-[12])</td>`)
 
 	// 正则提取课程编号 (第3个td)
 	courseCodeRegex := regexp.MustCompile(`<td align="left"[^>]*>(\d+)</td>`)
@@ -925,6 +932,13 @@ func (s *gradeService) extractAndCacheRegularGradeLinks(ctx context.Context, uid
 	regularLinkRegex := regexp.MustCompile(`/jsxsd/kscj/pscj_list\.do\?[^'">\s]+`)
 
 	for _, trContent := range trMatches {
+		// 提取学期
+		termMatches := termRegex.FindStringSubmatch(trContent)
+		if len(termMatches) < 2 {
+			continue
+		}
+		courseTerm := termMatches[1]
+
 		// 提取课程编号
 		codeMatches := courseCodeRegex.FindStringSubmatch(trContent)
 		if len(codeMatches) < 2 {
@@ -936,17 +950,32 @@ func (s *gradeService) extractAndCacheRegularGradeLinks(ctx context.Context, uid
 		linkMatches := regularLinkRegex.FindStringSubmatch(trContent)
 		if len(linkMatches) > 0 {
 			regularLink := linkMatches[0]
-			regularGradeLinks[courseCode] = regularLink
+
+			// 按学期分组
+			if termRegularGradeLinks[courseTerm] == nil {
+				termRegularGradeLinks[courseTerm] = make(map[string]interface{})
+			}
+			termRegularGradeLinks[courseTerm][courseCode] = regularLink
 		}
 	}
 
 	// 如果没有提取到链接,不执行缓存操作
-	if len(regularGradeLinks) == 0 {
+	if len(termRegularGradeLinks) == 0 {
 		return
 	}
 
-	// 缓存到Redis Hash (1小时过期)
-	_ = s.userDataCache.CacheRegularGrades(ctx, uid, term, regularGradeLinks, time.Hour)
+	// 如果指定了学期,只缓存该学期的数据
+	if term != "" {
+		if links, exists := termRegularGradeLinks[term]; exists {
+			_ = s.userDataCache.CacheRegularGrades(ctx, uid, term, links, time.Hour)
+		}
+		return
+	}
+
+	// 如果未指定学期(查询所有成绩),则为每个学期单独缓存
+	for courseTerm, links := range termRegularGradeLinks {
+		_ = s.userDataCache.CacheRegularGrades(ctx, uid, courseTerm, links, time.Hour)
+	}
 }
 
 // getRegularGradeLink 根据课程编号获取平时分链接
@@ -1015,4 +1044,53 @@ func (s *gradeService) parseRegularGradeFromHTML(r io.Reader) (*RegularGrade, er
 	}
 
 	return regularGrade, nil
+}
+
+// cacheGradesByTerm 将成绩按学期和学年分组并缓存
+func (s *gradeService) cacheGradesByTerm(ctx context.Context, uid int, grades []Grade) {
+	type GradeData struct {
+		Grades []Grade `json:"grades"`
+		GPA    *GPA    `json:"gpa"`
+	}
+
+	// 按学期分组
+	termGrades := make(map[string][]Grade)
+	// 按学年分组
+	yearGrades := make(map[string][]Grade)
+
+	for _, grade := range grades {
+		if grade.Term == "" {
+			continue
+		}
+
+		// 按学期分组
+		termGrades[grade.Term] = append(termGrades[grade.Term], grade)
+
+		// 提取学年 (例如: 2024-2025-1 -> 2024-2025)
+		termRegex := regexp.MustCompile(`^(\d{4}-\d{4})-[12]$`)
+		if matches := termRegex.FindStringSubmatch(grade.Term); len(matches) > 1 {
+			year := matches[1]
+			yearGrades[year] = append(yearGrades[year], grade)
+		}
+	}
+
+	// 缓存每个学期的成绩
+	for term, gradeList := range termGrades {
+		gpa := s.calculateGPA(gradeList)
+		data := GradeData{
+			Grades: gradeList,
+			GPA:    gpa,
+		}
+		_ = s.userDataCache.CacheGrades(ctx, uid, term, data, time.Hour)
+	}
+
+	// 缓存每个学年的成绩
+	for year, gradeList := range yearGrades {
+		gpa := s.calculateGPA(gradeList)
+		data := GradeData{
+			Grades: gradeList,
+			GPA:    gpa,
+		}
+		_ = s.userDataCache.CacheGrades(ctx, uid, year, data, time.Hour)
+	}
 }

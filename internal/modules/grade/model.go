@@ -3,8 +3,8 @@ package grade
 // Grade 成绩信息
 type Grade struct {
 	SerialNo string  `json:"serialNo"` // 序号
-	Term     string  `json:"Term"`     // 学期
-	Code     string  `json:"Code"`     // 课程代码
+	Term     string  `json:"term"`     // 学期
+	Code     string  `json:"code"`     // 课程代码
 	Subject  string  `json:"subject"`  // 课程名称
 	Score    string  `json:"score"`    // 分数
 	Credit   float64 `json:"credit"`   // 学分
@@ -31,11 +31,11 @@ type LevelGrade struct {
 
 // RegularGrade 平时分信息
 type RegularGrade struct {
-	FinalExamScore string `json:"FinalExamScore"` //期末考试分数
-	FinalExamRatio string `json:"FinalExamRatio"` //期末成绩占总成绩比例
-	RegularScore   string `json:"RegularScore"`   //平时成绩分数
-	RegularRatio   string `json:"RegularRatio"`   //平时成绩占总成绩比例
-	FinalScore     string `json:"FinalScore"`     //总成绩
+	FinalExamScore string `json:"finalExamScore"` //期末考试分数
+	FinalExamRatio string `json:"finalExamRatio"` //期末成绩占总成绩比例
+	RegularScore   string `json:"regularScore"`   //平时成绩分数
+	RegularRatio   string `json:"regularRatio"`   //平时成绩占总成绩比例
+	FinalScore     string `json:"finalScore"`     //总成绩
 }
 
 // GetGradesRequest 获取成绩请求
@@ -50,8 +50,8 @@ type GradesResponse struct {
 }
 
 type GetRegularGradesRequest struct {
-	Term string `json:"term"` //学期
-	Code string `json:"code"` //课程编号
+	Term string `json:"term" binding:"required"` //学期
+	Code string `json:"code" binding:"required"` //课程编号
 }
 
 // TermGradesData 单个学期的成绩数据
