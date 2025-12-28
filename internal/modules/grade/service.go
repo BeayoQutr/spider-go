@@ -270,13 +270,17 @@ func (s *gradeService) GetGradesByYear(ctx context.Context, uid int, year string
 		return nil, nil, err
 	}
 
+	// 解析第一学期成绩（如果没有成绩，返回空数组而不是错误）
 	gradeList1, err := s.parseGradesFromHTML(strings.NewReader(string(htmlBytes1)))
 	if err != nil {
-		return nil, nil, err
+		// 如果是"未解析到成绩"的错误，说明该学期还没有成绩，使用空数组
+		gradeList1 = []Grade{}
 	}
 
-	// 提取并缓存第一学期的平时分链接
-	s.extractAndCacheRegularGradeLinks(ctx, uid, term1, string(htmlBytes1))
+	// 提取并缓存第一学期的平时分链接（如果有的话）
+	if len(gradeList1) > 0 {
+		s.extractAndCacheRegularGradeLinks(ctx, uid, term1, string(htmlBytes1))
+	}
 
 	// 获取第二学期成绩
 	form2 := url.Values{}
@@ -297,16 +301,25 @@ func (s *gradeService) GetGradesByYear(ctx context.Context, uid int, year string
 		return nil, nil, err
 	}
 
+	// 解析第二学期成绩（如果没有成绩，返回空数组而不是错误）
 	gradeList2, err := s.parseGradesFromHTML(strings.NewReader(string(htmlBytes2)))
 	if err != nil {
-		return nil, nil, err
+		// 如果是"未解析到成绩"的错误，说明该学期还没有成绩，使用空数组
+		gradeList2 = []Grade{}
 	}
 
-	// 提取并缓存第二学期的平时分链接
-	s.extractAndCacheRegularGradeLinks(ctx, uid, term2, string(htmlBytes2))
+	// 提取并缓存第二学期的平时分链接（如果有的话）
+	if len(gradeList2) > 0 {
+		s.extractAndCacheRegularGradeLinks(ctx, uid, term2, string(htmlBytes2))
+	}
 
 	// 合并两个学期的成绩
 	allGrades := append(gradeList1, gradeList2...)
+
+	// 如果两个学期都没有成绩，返回错误
+	if len(allGrades) == 0 {
+		return nil, nil, common.NewAppError(common.CodeJwcParseFailed, "该学年暂无成绩数据")
+	}
 
 	// 计算学年 GPA（使用相同的计算方法）
 	gpa := s.calculateGPA(allGrades)
