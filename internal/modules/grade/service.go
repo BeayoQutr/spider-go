@@ -117,7 +117,7 @@ func (s *gradeService) GetAllGrades(ctx context.Context, uid int) ([]Grade, *GPA
 		return nil, nil, err
 	}
 
-	// 提取并缓存平时分链接（按学期分别缓存）
+	// 提取并缓存平时分链接（教务系统返回的HTML已包含所有学期的平时分链接）
 	s.extractAndCacheRegularGradeLinks(ctx, uid, "", string(htmlBytes))
 
 	// 计算总 GPA
@@ -920,46 +920,52 @@ func (s *gradeService) extractAndCacheRegularGradeLinks(ctx context.Context, uid
 	// 按学期分组的平时分链接
 	termRegularGradeLinks := make(map[string]map[string]interface{})
 
-	// 正则提取: 课程编号、学期和平时分链接
+	// 平时分链接在显示表格（id="dataList"）的HTML注释中
 	// HTML结构:
-	// <tr class="aaaaDel" style="visibility:hidden;">
-	//   <td>...</td>
-	//   <td>2025-2026-1</td>                                                    <- 学期
-	//   <td align="left" style="width: 110px;">230090475</td>                  <- 课程编号
-	//   <td>...</td>
-	//   <!-- <td>...<a href="/jsxsd/kscj/pscj_list.do?...">...</a></td> -->    <- 平时分链接在注释中
-	//   ...
-	// </tr>
+	// <table id="dataList">
+	//   <tr>
+	//     <td>1</td>
+	//     <td>2023-2024-1</td>                                                  <- 学期
+	//     <td align="left">130010050</td>                                       <- 课程编号
+	//     <td align="left">林学概论</td>
+	//     <!-- <td><a href="/jsxsd/kscj/pscj_list.do?...">85</a></td> -->      <- 平时分链接在注释中
+	//     <td><font color="blue">85</font></td>
+	//     ...
+	//   </tr>
+	// </table>
 
-	// 提取所有隐藏的tr标签内容 (包含注释)
-	trRegex := regexp.MustCompile(`(?s)<tr[^>]*class="aaaaDel"[^>]*>.*?</tr>`)
-	trMatches := trRegex.FindAllString(htmlContent, -1)
+	// 提取 id="dataList" 表格中的所有 <tr> 标签
+	dataListRegex := regexp.MustCompile(`(?s)<table[^>]*id="dataList"[^>]*>.*?</table>`)
+	dataListMatch := dataListRegex.FindString(htmlContent)
+	if dataListMatch == "" {
+		return
+	}
 
-	// 正则提取学期 (第2个td)
-	termRegex := regexp.MustCompile(`<td[^>]*>(\d{4}-\d{4}-[12])</td>`)
+	// 提取表格中的所有 <tr> (排除表头)
+	trRegex := regexp.MustCompile(`(?s)<tr\s+>.*?</tr>`)
+	trMatches := trRegex.FindAllString(dataListMatch, -1)
 
-	// 正则提取课程编号 (第3个td)
-	courseCodeRegex := regexp.MustCompile(`<td align="left"[^>]*>(\d+)</td>`)
-
-	// 正则提取平时分链接 (在HTML注释中)
+	// 预编译正则表达式
+	termRegex := regexp.MustCompile(`<td[^>]*>\s*(\d{4}-\d{4}-[12])\s*</td>`)
+	courseCodeRegex := regexp.MustCompile(`<td\s+align="left"[^>]*>\s*(\d+)\s*</td>`)
 	regularLinkRegex := regexp.MustCompile(`/jsxsd/kscj/pscj_list\.do\?[^'">\s]+`)
 
 	for _, trContent := range trMatches {
-		// 提取学期
+		// 在当前tr中提取学期
 		termMatches := termRegex.FindStringSubmatch(trContent)
 		if len(termMatches) < 2 {
 			continue
 		}
 		courseTerm := termMatches[1]
 
-		// 提取课程编号
+		// 在当前tr中提取课程编号（第一个 align="left" 的td）
 		codeMatches := courseCodeRegex.FindStringSubmatch(trContent)
 		if len(codeMatches) < 2 {
 			continue
 		}
 		courseCode := codeMatches[1]
 
-		// 提取平时分链接
+		// 在当前tr中提取平时分链接（在HTML注释中）
 		linkMatches := regularLinkRegex.FindStringSubmatch(trContent)
 		if len(linkMatches) > 0 {
 			regularLink := linkMatches[0]
@@ -977,15 +983,8 @@ func (s *gradeService) extractAndCacheRegularGradeLinks(ctx context.Context, uid
 		return
 	}
 
-	// 如果指定了学期,只缓存该学期的数据
-	if term != "" {
-		if links, exists := termRegularGradeLinks[term]; exists {
-			_ = s.userDataCache.CacheRegularGrades(ctx, uid, term, links, time.Hour)
-		}
-		return
-	}
-
-	// 如果未指定学期(查询所有成绩),则为每个学期单独缓存
+	// 无论是否指定学期，都将HTML中所有学期的平时分链接分别缓存
+	// 因为教务系统返回的HTML包含所有学期的平时分链接
 	for courseTerm, links := range termRegularGradeLinks {
 		_ = s.userDataCache.CacheRegularGrades(ctx, uid, courseTerm, links, time.Hour)
 	}
