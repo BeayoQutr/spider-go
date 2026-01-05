@@ -1,6 +1,7 @@
 package statistics
 
 import (
+	"spider-go/internal/modules/user"
 	"spider-go/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -13,8 +14,8 @@ type Module struct {
 }
 
 // NewModule 创建统计模块
-func NewModule(dauService service.DAUService) *Module {
-	svc := NewService(dauService)
+func NewModule(dauService service.DAUService, userRepo user.Repository) *Module {
+	svc := NewService(dauService, userRepo)
 	handler := NewHandler(svc)
 
 	return &Module{
@@ -29,6 +30,8 @@ func (m *Module) RegisterRoutes(adminGroup *gin.RouterGroup) {
 	// 管理员统计接口
 	adminGroup.GET("/dau", m.handler.GetTodayDAU)
 	adminGroup.GET("/dau/range", m.handler.GetDAURange)
+	adminGroup.GET("/user/count", m.handler.GetUserCount)
+	adminGroup.GET("/user/new", m.handler.GetNewUserCount)
 }
 
 // GetService 获取服务（供其他模块使用）

@@ -291,6 +291,17 @@ func (s *jwcSessionService) LoginAndCacheWithConfig(ctx context.Context, uid int
 		return common.NewAppError(common.CodeJwcLoginFailed, "重定向并非302")
 	}
 
+	// 4. 提取并缓存 CAS TGC cookie（登录成功后立即保存）
+	casURL, _ := url.Parse(loginURL)
+	casCookies := client.Jar.Cookies(casURL)
+	for _, cookie := range casCookies {
+		if cookie.Name == "TGC" {
+			// 缓存 TGC cookie，使用与 session 相同的过期时间
+			_ = s.sessionCache.SetTGC(ctx, uid, cookie, s.cacheExpire)
+			break
+		}
+	}
+
 	// 直接不处理重定向，用这个tgc的cookie去get系统，触发下一条重定向链，get全自动重定向
 	finalResp, finalURL, err := s.followGET(client, redirectURL, 8)
 	if err != nil {
@@ -298,7 +309,7 @@ func (s *jwcSessionService) LoginAndCacheWithConfig(ctx context.Context, uid int
 	}
 	defer finalResp.Body.Close()
 
-	// 6. 提取并缓存 cookies
+	// 5. 提取并缓存 cookies
 	uFinal, _ := url.Parse(finalURL)
 	base := &url.URL{Scheme: uFinal.Scheme, Host: uFinal.Host, Path: "/"}
 	cookies := client.Jar.Cookies(base)
@@ -309,7 +320,7 @@ func (s *jwcSessionService) LoginAndCacheWithConfig(ctx context.Context, uid int
 		}
 	}
 
-	// 7. 存入缓存
+	// 6. 存入缓存
 	if err := cookieCache.SetCookies(ctx, uid, cookies, s.cacheExpire); err != nil {
 		return common.NewAppError(common.CodeCacheError, "缓存会话失败")
 	}

@@ -13,6 +13,7 @@ type Module struct {
 	handler        *Handler
 	service        Service
 	captchaService CaptchaService
+	repository     Repository
 }
 
 // NewModule 创建用户模块
@@ -36,6 +37,7 @@ func NewModule(
 		handler:        handler,
 		service:        svc,
 		captchaService: captchaService,
+		repository:     repo,
 	}
 }
 
@@ -49,4 +51,9 @@ func (m *Module) RegisterRoutes(public *gin.RouterGroup, authenticated *gin.Rout
 // GetService 获取服务实例（用于跨模块调用）
 func (m *Module) GetService() Service {
 	return m.service
+}
+
+// GetRepository 获取仓库实例（用于跨模块调用）
+func (m *Module) GetRepository() Repository {
+	return m.repository
 }

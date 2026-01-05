@@ -14,6 +14,21 @@ type Notice struct {
 	IsHtml     bool      `json:"is_html"`                             // 是否HTML格式
 }
 
+type Introduction struct {
+	Id         int       `gorm:"primary_key;AUTO_INCREMENT" json:"id"`
+	Content    string    `gorm:"type:text" json:"content"`
+	IsShow     bool      `json:"is_show"`
+	CreateTime time.Time `gorm:"autoCreateTime" json:"create_time"`
+	UpdateTime time.Time `gorm:"autoUpdateTime" json:"update_time"`
+	IsRedirect bool      `json:"is_redirect"`
+	Link       string    `json:"link"`
+}
+
+// TableName 指定表名
+func (Introduction) TableName() string {
+	return "introduction"
+}
+
 // TableName 指定表名
 func (Notice) TableName() string {
 	return "notices"

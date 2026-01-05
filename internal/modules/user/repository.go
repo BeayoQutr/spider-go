@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"spider-go/internal/common"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -28,6 +29,11 @@ type Repository interface {
 	CreateWeChatBind(ctx context.Context, bind *UserWeChatMiniProgram) error
 	FindWeChatBindByUID(ctx context.Context, uid int, appID string) (*UserWeChatMiniProgram, error)
 	UpdateWeChatBind(ctx context.Context, bind *UserWeChatMiniProgram) error
+
+	// 统计相关
+	CountUsers(ctx context.Context) (int64, error)
+	CountNewUsersByDateRange(ctx context.Context, startDate, endDate time.Time) (int64, error)
+	CountNewUsersByDate(ctx context.Context, date time.Time) (int64, error)
 }
 
 // repository 用户数据访问实现
@@ -126,4 +132,43 @@ func (r *repository) FindWeChatBindByUID(ctx context.Context, uid int, appID str
 // UpdateWeChatBind 更新微信绑定
 func (r *repository) UpdateWeChatBind(ctx context.Context, bind *UserWeChatMiniProgram) error {
 	return r.db.WithContext(ctx).Save(bind).Error
+}
+
+// CountUsers 统计用户总数
+func (r *repository) CountUsers(ctx context.Context) (int64, error) {
+	var count int64
+	if err := r.db.WithContext(ctx).Model(&User{}).Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// CountNewUsersByDateRange 统计指定日期范围内的新增用户数
+func (r *repository) CountNewUsersByDateRange(ctx context.Context, startDate, endDate time.Time) (int64, error) {
+	var count int64
+	// 设置时间范围：startDate 00:00:00 到 endDate 23:59:59
+	startOfDay := time.Date(startDate.Year(), startDate.Month(), startDate.Day(), 0, 0, 0, 0, startDate.Location())
+	endOfDay := time.Date(endDate.Year(), endDate.Month(), endDate.Day(), 23, 59, 59, 999999999, endDate.Location())
+
+	if err := r.db.WithContext(ctx).Model(&User{}).
+		Where("created_at >= ? AND created_at <= ?", startOfDay, endOfDay).
+		Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// CountNewUsersByDate 统计指定日期的新增用户数
+func (r *repository) CountNewUsersByDate(ctx context.Context, date time.Time) (int64, error) {
+	var count int64
+	// 设置时间范围：当天 00:00:00 到 23:59:59
+	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	endOfDay := time.Date(date.Year(), date.Month(), date.Day(), 23, 59, 59, 999999999, date.Location())
+
+	if err := r.db.WithContext(ctx).Model(&User{}).
+		Where("created_at >= ? AND created_at <= ?", startOfDay, endOfDay).
+		Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return count, nil
 }

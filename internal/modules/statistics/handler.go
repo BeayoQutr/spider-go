@@ -22,7 +22,7 @@ func NewHandler(service Service) *Handler {
 // GetTodayDAU 获取今日DAU
 // @Summary 获取今日DAU
 // @Tags 统计
-// @Produce json
+// @Produce JSON
 // @Success 200 {object} common.Response{data=DAUResponse}
 // @Router /api/admin/statistics/dau [get]
 func (h *Handler) GetTodayDAU(c *gin.Context) {
@@ -90,4 +90,92 @@ func (h *Handler) GetDAURange(c *gin.Context) {
 		EndDate:   endDateStr,
 		Data:      dayData,
 	})
+}
+
+// GetUserCount 获取用户总数
+// @Summary 获取用户总数
+// @Tags 统计
+// @Produce json
+// @Success 200 {object} common.Response{data=UserCountResponse}
+// @Router /api/admin/statistics/user/count [get]
+func (h *Handler) GetUserCount(c *gin.Context) {
+	count, err := h.service.GetUserCount(c.Request.Context())
+	if err != nil {
+		common.ErrorWithAppError(c, err.(*common.AppError))
+		return
+	}
+
+	common.Success(c, UserCountResponse{
+		TotalCount: count,
+	})
+}
+
+// GetNewUserCount 获取新增用户数
+// @Summary 获取新增用户数
+// @Tags 统计
+// @Produce json
+// @Param date query string false "指定日期（格式：2024-01-01）"
+// @Param start_date query string false "开始日期（格式：2024-01-01）"
+// @Param end_date query string false "结束日期（格式：2024-01-31）"
+// @Success 200 {object} common.Response{data=NewUserCountResponse}
+// @Router /api/admin/statistics/user/new [get]
+func (h *Handler) GetNewUserCount(c *gin.Context) {
+	dateStr := c.Query("date")
+	startDateStr := c.Query("start_date")
+	endDateStr := c.Query("end_date")
+
+	var date *time.Time
+	var startDate *time.Time
+	var endDate *time.Time
+
+	// 解析单日日期
+	if dateStr != "" {
+		parsedDate, err := time.Parse("2006-01-02", dateStr)
+		if err != nil {
+			common.ErrorWithAppError(c, common.NewAppError(common.CodeInvalidParams, "日期格式错误，应为：2024-01-01"))
+			return
+		}
+		date = &parsedDate
+	}
+
+	// 解析日期范围
+	if startDateStr != "" && endDateStr != "" {
+		parsedStartDate, err := time.Parse("2006-01-02", startDateStr)
+		if err != nil {
+			common.ErrorWithAppError(c, common.NewAppError(common.CodeInvalidParams, "开始日期格式错误，应为：2024-01-01"))
+			return
+		}
+
+		parsedEndDate, err := time.Parse("2006-01-02", endDateStr)
+		if err != nil {
+			common.ErrorWithAppError(c, common.NewAppError(common.CodeInvalidParams, "结束日期格式错误，应为：2024-01-31"))
+			return
+		}
+
+		startDate = &parsedStartDate
+		endDate = &parsedEndDate
+	}
+
+	// 获取新增用户数
+	count, err := h.service.GetNewUserCount(c.Request.Context(), date, startDate, endDate)
+	if err != nil {
+		common.ErrorWithAppError(c, err.(*common.AppError))
+		return
+	}
+
+	// 构造响应
+	response := NewUserCountResponse{
+		TotalCount: count,
+	}
+
+	if startDate != nil && endDate != nil {
+		response.StartDate = startDateStr
+		response.EndDate = endDateStr
+	} else if date != nil {
+		response.Date = dateStr
+	} else {
+		response.Date = time.Now().Format("2006-01-02")
+	}
+
+	common.Success(c, response)
 }

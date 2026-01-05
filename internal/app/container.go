@@ -306,7 +306,7 @@ func (c *Container) initModules() {
 	c.ConfigModule = config.NewModule(c.ConfigCache)
 
 	// Statistics Module（统计模块）
-	c.StatisticsModule = statistics.NewModule(c.DAUService)
+	c.StatisticsModule = statistics.NewModule(c.DAUService, c.UserModule.GetRepository())
 }
 
 // initRSAPublicKey 初始化 RSA 公钥
