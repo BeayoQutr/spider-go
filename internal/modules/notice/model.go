@@ -51,3 +51,19 @@ type UpdateNoticeRequest struct {
 	IsTop      bool   `json:"is_top"`                     // 是否置顶
 	IsHtml     bool   `json:"is_html"`                    // 是否HTML格式
 }
+
+// CreateIntroductionRequest 创建使用须知请求
+type CreateIntroductionRequest struct {
+	Content    string `json:"content" binding:"required"` // 使用须知内容
+	IsShow     bool   `json:"is_show"`                    // 是否显示
+	IsRedirect bool   `json:"is_redirect"`                // 是否重定向
+	Link       string `json:"link"`                       // 重定向链接
+}
+
+// UpdateIntroductionRequest 更新使用须知请求
+type UpdateIntroductionRequest struct {
+	Content    string `json:"content" binding:"required"` // 使用须知内容
+	IsShow     bool   `json:"is_show"`                    // 是否显示
+	IsRedirect bool   `json:"is_redirect"`                // 是否重定向
+	Link       string `json:"link"`                       // 重定向链接
+}

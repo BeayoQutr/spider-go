@@ -29,6 +29,12 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup, adminGroup *gin.RouterGroup
 		notices.GET("/:id", h.GetNoticeByID) // 获取通知详情
 	}
 
+	// 公开接口 - 使用须知
+	introductions := r.Group("/introductions")
+	{
+		introductions.GET("", h.GetVisibleIntroductions) // 获取所有可见使用须知
+	}
+
 	// 管理员接口
 	if adminGroup != nil {
 		adminNotices := adminGroup.Group("/notices")
@@ -37,6 +43,15 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup, adminGroup *gin.RouterGroup
 			adminNotices.POST("", h.CreateNotice)       // 创建通知
 			adminNotices.PUT("/:id", h.UpdateNotice)    // 更新通知
 			adminNotices.DELETE("/:id", h.DeleteNotice) // 删除通知
+		}
+
+		// 管理员 - 使用须知管理
+		adminIntros := adminGroup.Group("/introductions")
+		{
+			adminIntros.GET("", h.GetAllIntroductions)       // 获取所有使用须知
+			adminIntros.POST("", h.CreateIntroduction)       // 创建使用须知
+			adminIntros.PUT("/:id", h.UpdateIntroduction)    // 更新使用须知
+			adminIntros.DELETE("/:id", h.DeleteIntroduction) // 删除使用须知
 		}
 	}
 }
@@ -184,4 +199,122 @@ func (h *Handler) DeleteNotice(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "通知删除成功"})
+}
+
+// GetVisibleIntroductions 获取所有可见使用须知（普通用户）
+// @Summary 获取所有可见使用须知
+// @Tags Introduction
+// @Produce json
+// @Success 200 {array} Introduction
+// @Router /introductions [get]
+func (h *Handler) GetVisibleIntroductions(c *gin.Context) {
+	intros, err := h.service.GetVisibleIntroductions(c.Request.Context())
+	if err != nil {
+		common.Error(c, common.CodeInternalError, "获取使用须知列表失败")
+		return
+	}
+
+	common.Success(c, intros)
+}
+
+// GetAllIntroductions 获取所有使用须知（管理员）
+// @Summary 获取所有使用须知
+// @Tags Admin/Introduction
+// @Produce json
+// @Success 200 {array} Introduction
+// @Router /admin/introductions [get]
+func (h *Handler) GetAllIntroductions(c *gin.Context) {
+	intros, err := h.service.GetAllIntroductions(c.Request.Context())
+	if err != nil {
+		common.Error(c, common.CodeInternalError, "获取使用须知列表失败")
+		return
+	}
+
+	common.Success(c, intros)
+}
+
+// CreateIntroduction 创建使用须知（管理员）
+// @Summary 创建使用须知
+// @Tags Admin/Introduction
+// @Accept json
+// @Produce json
+// @Param request body CreateIntroductionRequest true "创建使用须知请求"
+// @Success 200 {object} Introduction
+// @Router /admin/introductions [post]
+func (h *Handler) CreateIntroduction(c *gin.Context) {
+	var req CreateIntroductionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.Error(c, common.CodeInvalidParams, err.Error())
+		return
+	}
+
+	intro, err := h.service.CreateIntroduction(c.Request.Context(), req.Content, req.IsShow, req.IsRedirect, req.Link)
+	if err != nil {
+		if err == ErrEmptyContent {
+			common.Error(c, common.CodeInvalidParams, err.Error())
+		} else {
+			common.Error(c, common.CodeInternalError, "创建使用须知失败")
+		}
+		return
+	}
+
+	common.Success(c, intro)
+}
+
+// UpdateIntroduction 更新使用须知（管理员）
+// @Summary 更新使用须知
+// @Tags Admin/Introduction
+// @Accept json
+// @Produce json
+// @Param id path int true "使用须知ID"
+// @Param request body UpdateIntroductionRequest true "更新使用须知请求"
+// @Success 200 {object} Introduction
+// @Router /admin/introductions/{id} [put]
+func (h *Handler) UpdateIntroduction(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.Error(c, common.CodeInvalidParams, "无效的使用须知ID")
+		return
+	}
+
+	var req UpdateIntroductionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.Error(c, common.CodeInvalidParams, err.Error())
+		return
+	}
+
+	intro, err := h.service.UpdateIntroduction(c.Request.Context(), id, req.Content, req.IsShow, req.IsRedirect, req.Link)
+	if err != nil {
+		if err == ErrIntroductionNotFound {
+			common.Error(c, common.CodeNotFound, "使用须知不存在")
+		} else if err == ErrEmptyContent {
+			common.Error(c, common.CodeInvalidParams, err.Error())
+		} else {
+			common.Error(c, common.CodeInternalError, "更新使用须知失败")
+		}
+		return
+	}
+
+	common.Success(c, intro)
+}
+
+// DeleteIntroduction 删除使用须知（管理员）
+// @Summary 删除使用须知
+// @Tags Admin/Introduction
+// @Param id path int true "使用须知ID"
+// @Success 200 {object} gin.H
+// @Router /admin/introductions/{id} [delete]
+func (h *Handler) DeleteIntroduction(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.Error(c, common.CodeInvalidParams, "无效的使用须知ID")
+		return
+	}
+
+	if err := h.service.DeleteIntroduction(c.Request.Context(), id); err != nil {
+		common.Error(c, common.CodeInternalError, "删除使用须知失败")
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "使用须知删除成功"})
 }
