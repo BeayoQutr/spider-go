@@ -91,5 +91,8 @@ func initScheduler(container *app.Container) *scheduler.Scheduler {
 		container.ExamModule.GetService(),
 	))
 
+	// 添加重置绑定计数任务（每月1号凌晨执行）
+	s.AddTask(tasks.NewResetBindCountTask(container.DB))
+
 	return s
 }

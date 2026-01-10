@@ -41,6 +41,7 @@ func (h *Handler) RegisterRoutes(public *gin.RouterGroup, authenticated *gin.Rou
 	authenticated.GET("/info", h.GetUserInfo)          // 获取用户信息
 	authenticated.POST("/bind", h.BindJwc)             // 绑定教务系统
 	authenticated.GET("/is-bind", h.CheckIsBind)       // 检查绑定状态
+	authenticated.GET("/bind-status", h.GetBindStatus) // 获取绑定状态（包含绑定次数信息）
 	authenticated.POST("/wechat/bind", h.WeChatBind)   // 老用户绑定微信
 	authenticated.POST("/update-name", h.UpdateName)   // 更新用户名
 	authenticated.POST("/update-email", h.UpdateEmail) // 更新邮箱
@@ -182,16 +183,43 @@ func (h *Handler) BindJwc(c *gin.Context) {
 		return
 	}
 
-	if err := h.service.BindJwc(c.Request.Context(), uid.(int), req.Sid, req.Spwd); err != nil {
-		if err == ErrEmptyParams {
-			common.Error(c, common.CodeInvalidParams, err.Error())
+	// 获取客户端IP和User-Agent
+	ipAddress := c.ClientIP()
+	userAgent := c.Request.UserAgent()
+
+	if err := h.service.BindJwc(c.Request.Context(), uid.(int), req.Sid, req.Spwd, ipAddress, userAgent); err != nil {
+		// 使用AppError统一处理错误响应
+		if appErr, ok := err.(*common.AppError); ok {
+			common.Error(c, appErr.Code, appErr.Message)
 		} else {
-			common.Error(c, common.CodeJwcInvalidParams, err.Error())
+			common.Error(c, common.CodeInternalError, err.Error())
 		}
 		return
 	}
 
 	common.Success(c, gin.H{"message": "绑定成功"})
+}
+
+// GetBindStatus 获取绑定状态
+// @Summary 获取绑定状态
+// @Tags User
+// @Produce json
+// @Success 200 {object} BindStatusResponse
+// @Router /user/bind-status [get]
+func (h *Handler) GetBindStatus(c *gin.Context) {
+	uid, exists := c.Get("uid")
+	if !exists {
+		common.Error(c, common.CodeUnauthorized, "未授权")
+		return
+	}
+
+	status, err := h.service.GetBindStatus(c.Request.Context(), uid.(int))
+	if err != nil {
+		common.Error(c, common.CodeInternalError, "获取绑定状态失败")
+		return
+	}
+
+	common.Success(c, status)
 }
 
 // CheckIsBind 检查绑定状态

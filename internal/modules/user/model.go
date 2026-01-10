@@ -13,6 +13,12 @@ type User struct {
 	CreatedAt              time.Time             `json:"created_at"`
 	Avatar                 string                `gorm:"type:varchar(500)" json:"avatar"`
 	WeChatMiniProgramBinds UserWeChatMiniProgram `gorm:"foreignKey:Uid" json:"-"` // HasMany 关系
+
+	// 绑定频率控制
+	BindCountCurrentMonth int        `gorm:"type:tinyint;default:0;comment:本月绑定次数" json:"-"`
+	BindMonth             string     `gorm:"type:varchar(7);comment:绑定计数月份(YYYY-MM);index" json:"-"`
+	LastBindAt            *time.Time `gorm:"comment:最后一次绑定时间" json:"-"`
+	TotalBindCount        int        `gorm:"type:int;default:0;comment:累计绑定次数" json:"-"`
 }
 
 // TableName 指定表名
@@ -114,3 +120,40 @@ type LoginResponse struct {
 	Token string        `json:"token"`
 	User  *UserResponse `json:"user"`
 }
+
+// BindStatusResponse 绑定状态响应
+type BindStatusResponse struct {
+	IsBound            bool       `json:"is_bound"`              // 是否已绑定
+	CurrentSid         string     `json:"current_sid"`           // 当前学号
+	BindCountThisMonth int        `json:"bind_count_this_month"` // 本月绑定次数
+	BindLimit          int        `json:"bind_limit"`            // 绑定限制（2次/月）
+	RemainingCount     int        `json:"remaining_count"`       // 剩余次数
+	LastBindAt         *time.Time `json:"last_bind_at"`          // 最后绑定时间
+	NextResetAt        string     `json:"next_reset_at"`         // 下次重置时间
+}
+
+// JwcBindLog 教务系统绑定日志
+type JwcBindLog struct {
+	ID         int64     `gorm:"primary_key;AUTO_INCREMENT" json:"id"`
+	Uid        int       `gorm:"type:int;not null;index:idx_uid_created" json:"uid"`
+	OldSid     string    `gorm:"type:varchar(50);comment:原学号" json:"old_sid"`
+	NewSid     string    `gorm:"type:varchar(50);not null;comment:新学号" json:"new_sid"`
+	BindStatus int       `gorm:"type:tinyint;not null;index;comment:绑定状态(1成功 2失败-账号错误 3失败-超过限制 4失败-其他)" json:"bind_status"`
+	ErrorMsg   string    `gorm:"type:varchar(500);comment:错误信息" json:"error_msg"`
+	IpAddress  string    `gorm:"type:varchar(45);comment:IP地址" json:"ip_address"`
+	UserAgent  string    `gorm:"type:varchar(500);comment:User-Agent" json:"user_agent"`
+	CreatedAt  time.Time `gorm:"index:idx_uid_created;index:idx_created_at" json:"created_at"`
+}
+
+// TableName 指定表名
+func (*JwcBindLog) TableName() string {
+	return "jwc_bind_logs"
+}
+
+// 绑定状态常量
+const (
+	BindStatusSuccess     = 1 // 绑定成功
+	BindStatusFailedAuth  = 2 // 失败-账号错误
+	BindStatusFailedLimit = 3 // 失败-超过限制
+	BindStatusFailedOther = 4 // 失败-其他原因
+)

@@ -29,7 +29,7 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 // GetExams 获取考试安排
 // @Summary 获取考试安排
 // @Tags Exam
-// @Produce json
+// @Produce JSON
 // @Param term query string true "学期" example(2024-2025-1)
 // @Success 200 {array} ExamArrangement
 // @Router /exams [get]

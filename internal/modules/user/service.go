@@ -41,9 +41,11 @@ type Service interface {
 	GetUserInfo(ctx context.Context, uid int) (*User, error)
 
 	// BindJwc 教务系统绑定相关
-	BindJwc(ctx context.Context, uid int, sid, spwd string) error
+	BindJwc(ctx context.Context, uid int, sid, spwd, ipAddress, userAgent string) error
 	// CheckIsBind 检查是否绑定教务处
 	CheckIsBind(ctx context.Context, uid int) (bool, error)
+	// GetBindStatus 获取绑定状态（包含绑定次数信息）
+	GetBindStatus(ctx context.Context, uid int) (*BindStatusResponse, error)
 
 	// UpdateName 更新用户名
 	UpdateName(ctx context.Context, uid int, name string) error
@@ -211,12 +213,13 @@ func (s *userService) GetUserInfo(ctx context.Context, uid int) (*User, error) {
 	return user, nil
 }
 
-// BindJwc 绑定教务系统
-func (s *userService) BindJwc(ctx context.Context, uid int, sid, spwd string) error {
+// BindJwc 绑定教务系统（带频率限制）
+func (s *userService) BindJwc(ctx context.Context, uid int, sid, spwd, ipAddress, userAgent string) error {
 	if sid == "" || spwd == "" {
 		return ErrEmptyParams
 	}
-	//判断教务系统密码含有大小写字符，数字，特殊符号
+
+	// 判断教务系统密码含有大小写字符，数字
 	hasUpper := regexp.MustCompile(`[A-Z]`).MatchString(spwd)
 	hasLower := regexp.MustCompile(`[a-z]`).MatchString(spwd)
 	hasDigit := regexp.MustCompile(`\d`).MatchString(spwd)
@@ -224,24 +227,148 @@ func (s *userService) BindJwc(ctx context.Context, uid int, sid, spwd string) er
 		return common.NewAppError(common.CodeInvalidParams, "请绑定i中南林APP账号")
 	}
 
-	// 尝试登录教务系统验证账号
-	if err := s.sessionService.LoginCheck(ctx, sid, spwd); err != nil {
-		return common.NewAppError(common.CodeJwcLoginFailed, "请绑定i中南林APP账号")
-	}
-
-	// 更新数据库
-	if err := s.repo.UpdateJwc(ctx, uid, sid, spwd); err != nil {
+	// 1. 查询用户当前绑定状态
+	user, err := s.repo.FindByID(ctx, uid)
+	if err != nil {
 		return err
 	}
 
-	// 清除旧的会话缓存
-	err := s.sessionService.InvalidateSession(ctx, uid)
+	// 2. 判断是否为相同学号（只修改密码，不消耗次数）
+	isSameSid := (user.Sid != "" && user.Sid == sid)
 
-	if err != nil {
-		return common.NewAppError(common.CodeCacheError, "更新成功，删除缓存失败")
+	// 3. 检查绑定频率限制（仅当更换学号时才检查）
+	if !isSameSid {
+		currentMonth := time.Now().Format("2006-01")
+
+		// 如果跨月了，重置计数
+		if user.BindMonth != currentMonth {
+			user.BindCountCurrentMonth = 0
+			user.BindMonth = currentMonth
+		}
+
+		// 检查是否超过限制（每月2次）
+		if user.BindCountCurrentMonth >= 2 {
+			// 记录失败日志
+			_ = s.logBindAttempt(ctx, uid, user.Sid, sid, BindStatusFailedLimit, "本月绑定次数已达上限（2次）", ipAddress, userAgent)
+
+			nextMonth := time.Now().AddDate(0, 1, 0)
+			nextResetDate := time.Date(nextMonth.Year(), nextMonth.Month(), 1, 0, 0, 0, 0, time.Local)
+			return common.NewAppError(
+				common.CodeBindLimitExceeded,
+				fmt.Sprintf("本月绑定次数已达上限，下次可绑定时间：%s", nextResetDate.Format("2006-01-02 15:04:05")),
+			)
+		}
 	}
 
+	// 4. 验证教务系统账号
+	if err := s.sessionService.LoginCheck(ctx, sid, spwd); err != nil {
+		// 记录失败日志（账号错误不计入绑定次数）
+		_ = s.logBindAttempt(ctx, uid, user.Sid, sid, BindStatusFailedAuth, "教务系统账号或密码错误", ipAddress, userAgent)
+		return common.NewAppError(common.CodeJwcLoginFailed, "请绑定i中南林APP账号")
+	}
+
+	// 5. 开启事务：更新绑定信息
+	tx := s.repo.(*repository).db.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+
+	// 5.1 更新用户表
+	oldSid := user.Sid
+	now := time.Now()
+	currentMonth := time.Now().Format("2006-01")
+
+	// 基础更新字段（所有情况都要更新）
+	updates := map[string]interface{}{
+		"sid":          sid,
+		"spwd":         spwd,
+		"last_bind_at": now,
+	}
+
+	// 只有更换学号时才增加绑定次数
+	if !isSameSid {
+		updates["bind_count_current_month"] = user.BindCountCurrentMonth + 1
+		updates["bind_month"] = currentMonth
+		updates["total_bind_count"] = user.TotalBindCount + 1
+	}
+
+	if err := tx.WithContext(ctx).Model(&User{}).Where("uid = ?", uid).Updates(updates).Error; err != nil {
+		tx.Rollback()
+		_ = s.logBindAttempt(ctx, uid, oldSid, sid, BindStatusFailedOther, fmt.Sprintf("更新数据库失败: %v", err), ipAddress, userAgent)
+		return common.NewAppError(common.CodeDatabaseError, "绑定失败，请稍后重试")
+	}
+
+	// 5.2 记录绑定日志
+	log := &JwcBindLog{
+		Uid:        uid,
+		OldSid:     oldSid,
+		NewSid:     sid,
+		BindStatus: BindStatusSuccess,
+		IpAddress:  ipAddress,
+		UserAgent:  userAgent,
+		CreatedAt:  now,
+	}
+	if err := tx.WithContext(ctx).Create(log).Error; err != nil {
+		tx.Rollback()
+		return common.NewAppError(common.CodeDatabaseError, "记录日志失败")
+	}
+
+	// 5.3 提交事务
+	if err := tx.Commit().Error; err != nil {
+		return common.NewAppError(common.CodeDatabaseError, "提交事务失败")
+	}
+
+	// 6. 清除旧的教务系统会话缓存
+	_ = s.sessionService.InvalidateSession(ctx, uid)
+
 	return nil
+}
+
+// logBindAttempt 记录绑定尝试日志（辅助方法）
+func (s *userService) logBindAttempt(ctx context.Context, uid int, oldSid, newSid string, status int, errMsg, ipAddress, userAgent string) error {
+	log := &JwcBindLog{
+		Uid:        uid,
+		OldSid:     oldSid,
+		NewSid:     newSid,
+		BindStatus: status,
+		ErrorMsg:   errMsg,
+		IpAddress:  ipAddress,
+		UserAgent:  userAgent,
+		CreatedAt:  time.Now(),
+	}
+	return s.repo.(*repository).db.WithContext(ctx).Create(log).Error
+}
+
+// GetBindStatus 获取绑定状态
+func (s *userService) GetBindStatus(ctx context.Context, uid int) (*BindStatusResponse, error) {
+	user, err := s.repo.FindByID(ctx, uid)
+	if err != nil {
+		return nil, err
+	}
+
+	currentMonth := time.Now().Format("2006-01")
+	bindCount := user.BindCountCurrentMonth
+
+	// 如果跨月了，实际剩余次数为2次
+	if user.BindMonth != currentMonth {
+		bindCount = 0
+	}
+
+	// 计算下次重置时间（下个月1号）
+	nextMonth := time.Now().AddDate(0, 1, 0)
+	nextResetDate := time.Date(nextMonth.Year(), nextMonth.Month(), 1, 0, 0, 0, 0, time.Local)
+
+	return &BindStatusResponse{
+		IsBound:            user.Sid != "" && user.Spwd != "",
+		CurrentSid:         user.Sid,
+		BindCountThisMonth: bindCount,
+		BindLimit:          2,
+		RemainingCount:     2 - bindCount,
+		LastBindAt:         user.LastBindAt,
+		NextResetAt:        nextResetDate.Format("2006-01-02 15:04:05"),
+	}, nil
 }
 
 // CheckIsBind 检查是否绑定教务系统

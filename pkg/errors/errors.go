@@ -23,6 +23,7 @@ const (
 	CodeWeChatLoginFailed = 60001 // 微信登录失败
 	CodeWeChatBindFailed  = 60002 // 微信绑定失败
 	CodeWeChatAlreadyBind = 60003 // 微信已被绑定
+	CodeBindLimitExceeded = 40008 // 绑定次数超限
 
 	// 新增错误码
 	CodeDatabaseError      = 50002 // 数据库错误
