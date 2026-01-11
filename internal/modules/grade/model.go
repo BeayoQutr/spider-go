@@ -14,6 +14,14 @@ type Grade struct {
 	Flag     string  `json:"flag"`     //课程标志 修复缓考还计算成绩的bug
 }
 
+type UserDetailedInfo struct {
+	Grade   string `json:"grade"`
+	Class   string `json:"class"`
+	Major   string `json:"major"`
+	Collage string `json:"collage"`
+	Name    string `json:"name"`
+}
+
 // GPA 绩点信息
 type GPA struct {
 	AverageGPA   float64 `json:"averageGPA"`   // 平均绩点

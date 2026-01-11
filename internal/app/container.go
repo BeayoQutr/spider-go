@@ -13,6 +13,8 @@ import (
 	"spider-go/internal/modules/exam"
 	"spider-go/internal/modules/grade"
 	"spider-go/internal/modules/notice"
+	"spider-go/internal/modules/ranking"
+	"spider-go/internal/modules/reconciliation"
 	"spider-go/internal/modules/statistics"
 	"spider-go/internal/modules/user"
 	"spider-go/internal/service"
@@ -55,15 +57,17 @@ type Container struct {
 	DAUService     service.DAUService
 
 	// Modules (new architecture)
-	UserModule       *user.Module
-	AdminModule      *admin.Module
-	GradeModule      *grade.Module
-	CourseModule     *course.Module
-	ExamModule       *exam.Module
-	EvaluationModule *evaluation.Module
-	NoticeModule     *notice.Module
-	ConfigModule     *config.Module
-	StatisticsModule *statistics.Module
+	UserModule           *user.Module
+	AdminModule          *admin.Module
+	GradeModule          *grade.Module
+	CourseModule         *course.Module
+	ExamModule           *exam.Module
+	EvaluationModule     *evaluation.Module
+	NoticeModule         *notice.Module
+	ConfigModule         *config.Module
+	StatisticsModule     *statistics.Module
+	RankingModule        *ranking.Module
+	ReconciliationModule *reconciliation.Module
 }
 
 // NewContainer 创建依赖注入容器
@@ -307,6 +311,23 @@ func (c *Container) initModules() {
 
 	// Statistics Module（统计模块）
 	c.StatisticsModule = statistics.NewModule(c.DAUService, c.UserModule.GetRepository())
+
+	// Ranking Module（排名模块）
+	c.RankingModule = ranking.NewModule(c.DB)
+
+	// Reconciliation Module（对账模块）
+	c.ReconciliationModule = reconciliation.NewModule(
+		c.DB,
+		c.GradeModule.GetService(),
+		c.ExamModule.GetService(),
+		c.CourseModule.GetService(),
+		c.ConfigCache,
+		c.RankingModule.GetService(),
+	)
+
+	// 设置 Grade Module 的依赖（避免循环依赖，延迟注入）
+	c.GradeModule.SetGradeRepository(c.DB)
+	c.GradeModule.SetReconciliationTrigger(c.ReconciliationModule.GetService())
 }
 
 // initRSAPublicKey 初始化 RSA 公钥

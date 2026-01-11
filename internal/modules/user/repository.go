@@ -34,6 +34,10 @@ type Repository interface {
 	CountUsers(ctx context.Context) (int64, error)
 	CountNewUsersByDateRange(ctx context.Context, startDate, endDate time.Time) (int64, error)
 	CountNewUsersByDate(ctx context.Context, date time.Time) (int64, error)
+
+	// 批量查询相关
+	FindAllBoundUsers(ctx context.Context) ([]*User, error)
+	ClearJwcBinding(ctx context.Context, uid int) error
 }
 
 // repository 用户数据访问实现
@@ -171,4 +175,22 @@ func (r *repository) CountNewUsersByDate(ctx context.Context, date time.Time) (i
 		return 0, err
 	}
 	return count, nil
+}
+
+// FindAllBoundUsers 查找所有已绑定教务系统的用户
+func (r *repository) FindAllBoundUsers(ctx context.Context) ([]*User, error) {
+	var users []*User
+	if err := r.db.WithContext(ctx).
+		Where("sid != '' AND sid IS NOT NULL AND spwd != '' AND spwd IS NOT NULL").
+		Find(&users).Error; err != nil {
+		return nil, err
+	}
+	return users, nil
+}
+
+// ClearJwcBinding 清除用户的教务系统绑定信息
+func (r *repository) ClearJwcBinding(ctx context.Context, uid int) error {
+	return r.db.WithContext(ctx).Model(&User{}).Where("uid = ?", uid).Updates(map[string]interface{}{
+		"spwd": "",
+	}).Error
 }

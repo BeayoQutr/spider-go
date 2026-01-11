@@ -22,10 +22,11 @@ func NewHandler(service Service) *Handler {
 func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 	grades := r.Group("/grades")
 	{
-		grades.GET("", h.GetGrades)                  // 获取成绩（可选term参数）
-		grades.GET("/level", h.GetLevelGrades)       // 获取等级考试成绩
-		grades.GET("/analysis", h.GetGradesAnalysis) // 获取成绩分析
-		grades.POST("/regular", h.GetRegularScore)   // 获取平时分
+		grades.GET("", h.GetGrades)                   // 获取成绩（可选term参数）
+		grades.GET("/level", h.GetLevelGrades)        // 获取等级考试成绩
+		grades.GET("/analysis", h.GetGradesAnalysis)  // 获取成绩分析
+		grades.POST("/regular", h.GetRegularScore)    // 获取平时分
+		grades.GET("/student-info", h.GetStudentInfo) // 获取学生信息（年级、学院、专业、班级）
 	}
 }
 
@@ -176,4 +177,30 @@ func (h *Handler) GetRegularScore(c *gin.Context) {
 	}
 
 	common.Success(c, regularGrade)
+}
+
+// GetStudentInfo 获取学生详细信息
+// @Summary 获取学生详细信息（年级、学院、专业、班级）
+// @Tags Grade
+// @Produce json
+// @Success 200 {object} UserDetailedInfo
+// @Router /grades/student-info [get]
+func (h *Handler) GetStudentInfo(c *gin.Context) {
+	uid, ok := c.Get("uid")
+	if !ok {
+		common.Error(c, common.CodeUnauthorized, "未授权")
+		return
+	}
+
+	info, err := h.service.GetUserGradeMajorClass(c.Request.Context(), uid.(int))
+	if err != nil {
+		if appErr, ok := err.(*common.AppError); ok {
+			common.ErrorWithAppError(c, appErr)
+		} else {
+			common.Error(c, common.CodeInternalError, "获取学生信息失败")
+		}
+		return
+	}
+
+	common.Success(c, info)
 }

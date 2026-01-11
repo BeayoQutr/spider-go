@@ -213,7 +213,7 @@ func (s *userService) GetUserInfo(ctx context.Context, uid int) (*User, error) {
 	return user, nil
 }
 
-// BindJwc 绑定教务系统（带频率限制）
+// BindJwc 绑定教务系统（学号一旦绑定不可更换）
 func (s *userService) BindJwc(ctx context.Context, uid int, sid, spwd, ipAddress, userAgent string) error {
 	if sid == "" || spwd == "" {
 		return ErrEmptyParams
@@ -233,38 +233,20 @@ func (s *userService) BindJwc(ctx context.Context, uid int, sid, spwd, ipAddress
 		return err
 	}
 
-	// 2. 判断是否为相同学号（只修改密码，不消耗次数）
-	isSameSid := (user.Sid != "" && user.Sid == sid)
-
-	// 3. 检查绑定频率限制（仅当更换学号时才检查）
-	if !isSameSid {
-		currentMonth := time.Now().Format("2006-01")
-
-		// 如果跨月了，重置计数
-		if user.BindMonth != currentMonth {
-			user.BindCountCurrentMonth = 0
-			user.BindMonth = currentMonth
-		}
-
-		// 检查是否超过限制（每月2次）
-		if user.BindCountCurrentMonth >= 2 {
-			// 记录失败日志
-			_ = s.logBindAttempt(ctx, uid, user.Sid, sid, BindStatusFailedLimit, "本月绑定次数已达上限（2次）", ipAddress, userAgent)
-
-			nextMonth := time.Now().AddDate(0, 1, 0)
-			nextResetDate := time.Date(nextMonth.Year(), nextMonth.Month(), 1, 0, 0, 0, 0, time.Local)
-			return common.NewAppError(
-				common.CodeBindLimitExceeded,
-				fmt.Sprintf("本月绑定次数已达上限，下次可绑定时间：%s", nextResetDate.Format("2006-01-02 15:04:05")),
-			)
-		}
+	// 2. 检查是否已绑定学号（学号一旦绑定不可更换）
+	if user.Sid != "" && user.Sid != sid {
+		_ = s.logBindAttempt(ctx, uid, user.Sid, sid, BindStatusFailedLimit, "学号已绑定，不允许更换", ipAddress, userAgent)
+		return common.NewAppError(common.CodeBindLimitExceeded, "学号已绑定，不允许更换。如需更换请联系管理员")
 	}
+
+	// 3. 判断是否为相同学号（只修改密码）
+	isSameSid := (user.Sid != "" && user.Sid == sid)
 
 	// 4. 验证教务系统账号
 	if err := s.sessionService.LoginCheck(ctx, sid, spwd); err != nil {
-		// 记录失败日志（账号错误不计入绑定次数）
+		// 记录失败日志
 		_ = s.logBindAttempt(ctx, uid, user.Sid, sid, BindStatusFailedAuth, "教务系统账号或密码错误", ipAddress, userAgent)
-		return common.NewAppError(common.CodeJwcLoginFailed, "请绑定i中南林APP账号")
+		return common.NewAppError(common.CodeJwcLoginFailed, "用户名或密码错误")
 	}
 
 	// 5. 开启事务：更新绑定信息
@@ -278,19 +260,16 @@ func (s *userService) BindJwc(ctx context.Context, uid int, sid, spwd, ipAddress
 	// 5.1 更新用户表
 	oldSid := user.Sid
 	now := time.Now()
-	currentMonth := time.Now().Format("2006-01")
 
-	// 基础更新字段（所有情况都要更新）
+	// 基础更新字段
 	updates := map[string]interface{}{
 		"sid":          sid,
 		"spwd":         spwd,
 		"last_bind_at": now,
 	}
 
-	// 只有更换学号时才增加绑定次数
+	// 首次绑定时记录绑定次数
 	if !isSameSid {
-		updates["bind_count_current_month"] = user.BindCountCurrentMonth + 1
-		updates["bind_month"] = currentMonth
 		updates["total_bind_count"] = user.TotalBindCount + 1
 	}
 
@@ -348,26 +327,12 @@ func (s *userService) GetBindStatus(ctx context.Context, uid int) (*BindStatusRe
 		return nil, err
 	}
 
-	currentMonth := time.Now().Format("2006-01")
-	bindCount := user.BindCountCurrentMonth
-
-	// 如果跨月了，实际剩余次数为2次
-	if user.BindMonth != currentMonth {
-		bindCount = 0
-	}
-
-	// 计算下次重置时间（下个月1号）
-	nextMonth := time.Now().AddDate(0, 1, 0)
-	nextResetDate := time.Date(nextMonth.Year(), nextMonth.Month(), 1, 0, 0, 0, 0, time.Local)
-
 	return &BindStatusResponse{
-		IsBound:            user.Sid != "" && user.Spwd != "",
-		CurrentSid:         user.Sid,
-		BindCountThisMonth: bindCount,
-		BindLimit:          2,
-		RemainingCount:     2 - bindCount,
-		LastBindAt:         user.LastBindAt,
-		NextResetAt:        nextResetDate.Format("2006-01-02 15:04:05"),
+		IsBound:        user.Sid != "" && user.Spwd != "",
+		CurrentSid:     user.Sid,
+		TotalBindCount: user.TotalBindCount,
+		LastBindAt:     user.LastBindAt,
+		CanChangeSid:   user.Sid == "", // 只有未绑定时才能更换学号
 	}, nil
 }
 

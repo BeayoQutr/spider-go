@@ -6,6 +6,7 @@ import (
 	"spider-go/internal/shared"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // Module 成绩模块
@@ -42,4 +43,16 @@ func (m *Module) RegisterRoutes(r *gin.RouterGroup) {
 // GetService 获取服务实例（用于跨模块调用）
 func (m *Module) GetService() Service {
 	return m.service
+}
+
+// SetGradeRepository 设置成绩仓储（用于离线查询）
+func (m *Module) SetGradeRepository(db *gorm.DB) {
+	if svc, ok := m.service.(*gradeService); ok {
+		svc.SetGradeRepository(NewGradeRepository(db))
+	}
+}
+
+// SetReconciliationTrigger 设置对账触发器
+func (m *Module) SetReconciliationTrigger(trigger ReconciliationTrigger) {
+	m.service.SetReconciliationTrigger(trigger)
 }

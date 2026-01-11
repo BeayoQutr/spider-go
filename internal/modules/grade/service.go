@@ -18,7 +18,73 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"gorm.io/gorm"
 )
+
+// GradeRepository 成绩数据访问接口（用于离线查询）
+type GradeRepository interface {
+	GetGradesByUid(ctx context.Context, uid int) ([]Grade, error)
+}
+
+// gradeRepository 成绩仓储实现
+type gradeRepository struct {
+	db *gorm.DB
+}
+
+// NewGradeRepository 创建成绩仓储
+func NewGradeRepository(db *gorm.DB) GradeRepository {
+	return &gradeRepository{db: db}
+}
+
+// GetGradesByUid 从数据库获取用户成绩
+func (r *gradeRepository) GetGradesByUid(ctx context.Context, uid int) ([]Grade, error) {
+	var dbGrades []struct {
+		SerialNo string
+		Term     string
+		Code     string
+		Subject  string
+		Score    string
+		Credit   float64
+		Gpa      float64
+		Status   int
+		Property string
+		Flag     string
+	}
+
+	err := r.db.WithContext(ctx).
+		Table("grades").
+		Select("serial_no, term, code, subject, score, credit, gpa, status, property, flag").
+		Where("uid = ? AND is_deleted = ?", uid, false).
+		Order("term DESC, code ASC").
+		Find(&dbGrades).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	grades := make([]Grade, len(dbGrades))
+	for i, g := range dbGrades {
+		grades[i] = Grade{
+			SerialNo: g.SerialNo,
+			Term:     g.Term,
+			Code:     g.Code,
+			Subject:  g.Subject,
+			Score:    g.Score,
+			Credit:   g.Credit,
+			Gpa:      g.Gpa,
+			Status:   g.Status,
+			Property: g.Property,
+			Flag:     g.Flag,
+		}
+	}
+
+	return grades, nil
+}
+
+// ReconciliationTrigger 对账触发器接口（避免循环依赖）
+type ReconciliationTrigger interface {
+	TriggerGradeSync(ctx context.Context, uid int)
+}
 
 // Service 成绩服务接口
 type Service interface {
@@ -27,19 +93,25 @@ type Service interface {
 	GetGradesByYear(ctx context.Context, uid int, year string) ([]Grade, *GPA, error)
 	GetLevelGrades(ctx context.Context, uid int) ([]LevelGrade, error)
 	GetRegularGrades(ctx context.Context, uid int, term string, courseId string) (*RegularGrade, error)
-	// 成绩分析接口
+	// GetRecentTermsGrades 成绩分析接口
 	GetRecentTermsGrades(ctx context.Context, uid int) (*TermsGradesAnalysis, error)
+	// GetUserGradeMajorClass 获取用户年级专业班级
+	GetUserGradeMajorClass(ctx context.Context, uid int) (*UserDetailedInfo, error)
+	// SetReconciliationTrigger 设置对账触发器（用于延迟注入，避免循环依赖）
+	SetReconciliationTrigger(trigger ReconciliationTrigger)
 }
 
 // gradeService 成绩服务实现
 type gradeService struct {
-	userQuery      shared.UserQuery
-	sessionService service.SessionService
-	crawlerService service.CrawlerService
-	userDataCache  cache.UserDataCache
-	configCache    cache.ConfigCache
-	gradeURL       string
-	gradeLevelURL  string
+	userQuery             shared.UserQuery
+	sessionService        service.SessionService
+	crawlerService        service.CrawlerService
+	userDataCache         cache.UserDataCache
+	configCache           cache.ConfigCache
+	gradeRepo             GradeRepository
+	reconciliationTrigger ReconciliationTrigger
+	gradeURL              string
+	gradeLevelURL         string
 }
 
 // NewService 创建成绩服务
@@ -63,7 +135,18 @@ func NewService(
 	}
 }
 
+// SetGradeRepository 设置成绩仓储（用于延迟注入）
+func (s *gradeService) SetGradeRepository(repo GradeRepository) {
+	s.gradeRepo = repo
+}
+
+// SetReconciliationTrigger 设置对账触发器
+func (s *gradeService) SetReconciliationTrigger(trigger ReconciliationTrigger) {
+	s.reconciliationTrigger = trigger
+}
+
 // GetAllGrades 获取所有成绩
+// 策略：先尝试从教务系统获取（2秒超时），超时或失败则返回数据库数据
 func (s *gradeService) GetAllGrades(ctx context.Context, uid int) ([]Grade, *GPA, error) {
 	// 获取用户信息
 	user, err := s.userQuery.GetUserByUid(ctx, uid)
@@ -75,7 +158,7 @@ func (s *gradeService) GetAllGrades(ctx context.Context, uid int) ([]Grade, *GPA
 		return nil, nil, common.NewAppError(common.CodeJwcNotBound, "未绑定教务系统账号")
 	}
 
-	// 先查询缓存
+	// 先查询 Redis 缓存
 	type GradeData struct {
 		Grades []Grade `json:"grades"`
 		GPA    *GPA    `json:"gpa"`
@@ -85,8 +168,36 @@ func (s *gradeService) GetAllGrades(ctx context.Context, uid int) ([]Grade, *GPA
 		return cachedData.Grades, cachedData.GPA, nil
 	}
 
+	// 创建带 2 秒超时的上下文
+	timeoutCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	// 尝试从教务系统获取成绩
+	grades, gpa, err := s.fetchGradesFromJwc(timeoutCtx, uid, user.Sid, user.Spwd)
+
+	if err == nil {
+		// 成功从教务系统获取，异步触发对账更新
+		s.triggerAsyncReconciliation(uid)
+		return grades, gpa, nil
+	}
+
+	// 教务系统获取失败（超时或其他错误），尝试从数据库获取
+	log.Printf("[GetAllGrades] 教务系统请求失败，尝试从数据库获取：uid=%d, err=%v", uid, err)
+
+	dbGrades, dbGPA, dbErr := s.getGradesFromDatabase(ctx, uid)
+	if dbErr == nil && len(dbGrades) > 0 {
+		// 从数据库获取成功，不触发对账（教务系统超时，触发对账也没意义）
+		return dbGrades, dbGPA, nil
+	}
+
+	// 数据库也没有数据，返回原始错误
+	return nil, nil, err
+}
+
+// fetchGradesFromJwc 从教务系统获取成绩
+func (s *gradeService) fetchGradesFromJwc(ctx context.Context, uid int, sid, spwd string) ([]Grade, *GPA, error) {
 	// 获取会话
-	cookies, err := s.getCookiesOrLogin(ctx, uid, user.Sid, user.Spwd)
+	cookies, err := s.getCookiesOrLogin(ctx, uid, sid, spwd)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -124,7 +235,10 @@ func (s *gradeService) GetAllGrades(ctx context.Context, uid int) ([]Grade, *GPA
 	gpa := s.calculateGPA(gradeList)
 
 	// 写入总成绩缓存（1小时过期）
-	data := GradeData{
+	data := struct {
+		Grades []Grade `json:"grades"`
+		GPA    *GPA    `json:"gpa"`
+	}{
 		Grades: gradeList,
 		GPA:    gpa,
 	}
@@ -134,6 +248,40 @@ func (s *gradeService) GetAllGrades(ctx context.Context, uid int) ([]Grade, *GPA
 	s.cacheGradesByTerm(ctx, uid, gradeList)
 
 	return gradeList, gpa, nil
+}
+
+// getGradesFromDatabase 从数据库获取成绩
+func (s *gradeService) getGradesFromDatabase(ctx context.Context, uid int) ([]Grade, *GPA, error) {
+	if s.gradeRepo == nil {
+		return nil, nil, common.NewAppError(common.CodeInternalError, "成绩仓储未配置")
+	}
+
+	grades, err := s.gradeRepo.GetGradesByUid(ctx, uid)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if len(grades) == 0 {
+		return nil, nil, common.NewAppError(common.CodeJwcParseFailed, "暂无成绩数据")
+	}
+
+	// 计算 GPA
+	gpa := s.calculateGPA(grades)
+
+	return grades, gpa, nil
+}
+
+// triggerAsyncReconciliation 异步触发对账更新
+func (s *gradeService) triggerAsyncReconciliation(uid int) {
+	if s.reconciliationTrigger == nil {
+		return
+	}
+
+	// 异步执行，不阻塞当前请求
+	go func() {
+		ctx := context.Background()
+		s.reconciliationTrigger.TriggerGradeSync(ctx, uid)
+	}()
 }
 
 // GetGradesByTerm 根据学期获取成绩
@@ -412,6 +560,138 @@ func (s *gradeService) GetRegularGrades(ctx context.Context, uid int, term strin
 	}
 
 	return regularGrade, nil
+}
+
+// GetUserGradeMajorClass 获取用户年级、学院、专业、班级信息
+func (s *gradeService) GetUserGradeMajorClass(ctx context.Context, uid int) (*UserDetailedInfo, error) {
+	// 获取用户信息
+	user, err := s.userQuery.GetUserByUid(ctx, uid)
+	if err != nil {
+		return nil, common.NewAppError(common.CodeUserNotFound, "用户不存在")
+	}
+
+	if user.Sid == "" || user.Spwd == "" {
+		return nil, common.NewAppError(common.CodeJwcNotBound, "未绑定教务系统账号")
+	}
+
+	// 先查询缓存
+	var cachedInfo UserDetailedInfo
+	if err := s.userDataCache.GetStudentInfo(ctx, uid, &cachedInfo); err == nil {
+		// 如果缓存存在且姓名不为空，直接返回
+		if cachedInfo.Name != "" {
+			return &cachedInfo, nil
+		}
+		// 否则重新获取（旧缓存没有姓名字段）
+	}
+
+	// 获取会话
+	cookies, err := s.getCookiesOrLogin(ctx, uid, user.Sid, user.Spwd)
+	if err != nil {
+		return nil, err
+	}
+
+	// 构造学生信息卡片URL
+	studentInfoURL := "http://jwgl.csuft.edu.cn/jsxsd/grxx/xsxx"
+
+	// 发起请求
+	body, err := s.crawlerService.FetchWithCookies(ctx, "GET", studentInfoURL, cookies, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer body.Close()
+
+	// 解析学生信息
+	info, err := s.parseStudentInfoFromHTML(body, user.Sid)
+	if err != nil {
+		return nil, err
+	}
+
+	// 写入缓存（24小时过期，学生信息很少变化）
+	_ = s.userDataCache.CacheStudentInfo(ctx, uid, info, 24*time.Hour)
+
+	return info, nil
+}
+
+// parseStudentInfoFromHTML 从HTML中解析学生信息（年级、学院、专业、班级、姓名）
+func (s *gradeService) parseStudentInfoFromHTML(r io.Reader, sid string) (*UserDetailedInfo, error) {
+	doc, err := goquery.NewDocumentFromReader(r)
+	if err != nil {
+		return nil, common.NewAppError(common.CodeJwcParseFailed, "解析HTML失败")
+	}
+
+	// 从学号中提取年级（例如：20232343 -> 2023）
+	var grade string
+	if len(sid) >= 4 {
+		grade = sid[:4]
+	}
+
+	// 查找包含院系、专业、班级信息的表格行
+	// HTML结构：
+	// <tr>
+	//   <td>院系：计算机与数学学院</td>
+	//   <td>专业：计算机科学与技术</td>
+	//   <td>学制：4</td>
+	//   <td>班级：2023计算机科学与技术2班</td>
+	//   <td>学号：20232343</td>
+	// </tr>
+	var college, major, class, name string
+
+	// 查找包含"院系："的单元格
+	doc.Find("td").Each(func(i int, sel *goquery.Selection) {
+		text := strings.TrimSpace(sel.Text())
+
+		// 提取院系
+		if strings.HasPrefix(text, "院系：") {
+			college = strings.TrimPrefix(text, "院系：")
+		}
+
+		// 提取专业
+		if strings.HasPrefix(text, "专业：") {
+			major = strings.TrimPrefix(text, "专业：")
+		}
+
+		// 提取班级
+		if strings.HasPrefix(text, "班级：") {
+			class = strings.TrimPrefix(text, "班级：")
+		}
+	})
+
+	// 提取姓名：从学籍卡片表格中获取
+	// HTML结构：
+	// <tr>
+	//   <td>姓名</td>
+	//   <td>&nbsp;费德</td>
+	//   ...
+	// </tr>
+	doc.Find("tr").Each(func(i int, tr *goquery.Selection) {
+		tds := tr.Find("td")
+		if tds.Length() >= 2 {
+			firstTd := strings.TrimSpace(tds.Eq(0).Text())
+			if firstTd == "姓名" {
+				// 获取第二个td的内容作为姓名
+				nameText := strings.TrimSpace(tds.Eq(1).Text())
+				// 去除 &nbsp; 转换后的空格
+				nameText = strings.ReplaceAll(nameText, "\u00A0", "")
+				nameText = strings.TrimSpace(nameText)
+				if nameText != "" && name == "" {
+					name = nameText
+				}
+			}
+		}
+	})
+
+	// 检查是否成功解析到必要信息
+	if college == "" || major == "" || class == "" {
+		return nil, common.NewAppError(common.CodeJwcParseFailed, "未能解析到完整的学生信息")
+	}
+
+	return &UserDetailedInfo{
+		Grade:   grade,
+		Class:   class,
+		Major:   major,
+		Collage: college,
+		Name:    name,
+	}, nil
 }
 
 // getCookiesOrLogin 获取缓存的 cookies 或登录

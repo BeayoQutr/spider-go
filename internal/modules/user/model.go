@@ -123,13 +123,11 @@ type LoginResponse struct {
 
 // BindStatusResponse 绑定状态响应
 type BindStatusResponse struct {
-	IsBound            bool       `json:"is_bound"`              // 是否已绑定
-	CurrentSid         string     `json:"current_sid"`           // 当前学号
-	BindCountThisMonth int        `json:"bind_count_this_month"` // 本月绑定次数
-	BindLimit          int        `json:"bind_limit"`            // 绑定限制（2次/月）
-	RemainingCount     int        `json:"remaining_count"`       // 剩余次数
-	LastBindAt         *time.Time `json:"last_bind_at"`          // 最后绑定时间
-	NextResetAt        string     `json:"next_reset_at"`         // 下次重置时间
+	IsBound        bool       `json:"is_bound"`         // 是否已绑定
+	CurrentSid     string     `json:"current_sid"`      // 当前学号
+	TotalBindCount int        `json:"total_bind_count"` // 累计绑定次数
+	LastBindAt     *time.Time `json:"last_bind_at"`     // 最后绑定时间
+	CanChangeSid   bool       `json:"can_change_sid"`   // 是否可以更换学号（只有未绑定时为true）
 }
 
 // JwcBindLog 教务系统绑定日志

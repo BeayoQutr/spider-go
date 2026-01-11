@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"spider-go/internal/modules/admin"
 	"spider-go/internal/modules/notice"
+	"spider-go/internal/modules/ranking"
+	"spider-go/internal/modules/reconciliation"
 	"spider-go/internal/modules/user"
 
 	"gorm.io/driver/mysql"
@@ -29,6 +31,16 @@ func InitDBWithConfig(config *Config) (*gorm.DB, error) {
 		&user.UserWeChatMiniProgram{},
 		&notice.Introduction{},
 		&user.JwcBindLog{}, // 绑定日志表
+		// 对账/同步模块表
+		&reconciliation.SyncTask{},
+		&reconciliation.SyncLog{},
+		&reconciliation.Grade{},
+		&reconciliation.RegularGrade{},
+		&reconciliation.Exam{},
+		&reconciliation.LevelExam{},
+		&reconciliation.Course{},
+		&reconciliation.UserSyncStatus{},
+		&ranking.StudentGPA{}, // 学生GPA数据（排名实时计算）
 	); err != nil {
 		return nil, err
 	}

@@ -29,6 +29,11 @@ type UserDataCache interface {
 	CacheRegularGrades(ctx context.Context, uid int, term string, data interface{}, expiration time.Duration) error
 	// GetRegularGrades 获取平时成绩
 	GetRegularGrades(ctx context.Context, uid int, term string, target interface{}) error
+
+	// CacheStudentInfo 缓存学生信息（年级、学院、专业、班级）
+	CacheStudentInfo(ctx context.Context, uid int, data interface{}, expiration time.Duration) error
+	// GetStudentInfo 获取学生信息缓存
+	GetStudentInfo(ctx context.Context, uid int, target interface{}) error
 }
 
 // RedisUserDataCache Redis 实现的用户数据缓存
@@ -167,4 +172,28 @@ func (c *RedisUserDataCache) getRegularGradesKey(uid int, term string) string {
 		return fmt.Sprintf("data:regular:%d:all", uid)
 	}
 	return fmt.Sprintf("data:regular:%d:%s", uid, term)
+}
+
+// CacheStudentInfo 缓存学生信息
+func (c *RedisUserDataCache) CacheStudentInfo(ctx context.Context, uid int, data interface{}, expiration time.Duration) error {
+	key := c.getStudentInfoKey(uid)
+	bytes, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	return c.client.Set(ctx, key, bytes, expiration).Err()
+}
+
+// GetStudentInfo 获取学生信息缓存
+func (c *RedisUserDataCache) GetStudentInfo(ctx context.Context, uid int, target interface{}) error {
+	key := c.getStudentInfoKey(uid)
+	bytes, err := c.client.Get(ctx, key).Bytes()
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(bytes, target)
+}
+
+func (c *RedisUserDataCache) getStudentInfoKey(uid int) string {
+	return fmt.Sprintf("data:student_info:%d", uid)
 }

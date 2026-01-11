@@ -45,6 +45,9 @@ func SetupRoutes(r *gin.Engine, container *app.Container) {
 		adminStats := adminAuth.Group("/statistics")
 		container.StatisticsModule.RegisterRoutes(adminStats)
 
+		// 管理员同步模块
+		container.ReconciliationModule.RegisterAdminRoutes(adminAuth, container.UserModule.GetRepository())
+
 		// ========== 业务模块路由 ==========
 		// 成绩模块
 		container.GradeModule.RegisterRoutes(userAuth)
@@ -59,5 +62,10 @@ func SetupRoutes(r *gin.Engine, container *app.Container) {
 		container.NoticeModule.RegisterRoutes(api, adminAuth)
 		//教评模块
 		container.EvaluationModule.RegisterRoutes(userAuth)
+
+		// 排名模块
+		container.RankingModule.RegisterRoutes(userAuth)
+		// 对账/同步模块
+		container.ReconciliationModule.RegisterRoutes(userAuth)
 	}
 }

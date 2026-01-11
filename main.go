@@ -83,16 +83,15 @@ func initScheduler(container *app.Container) *scheduler.Scheduler {
 	// 添加 RSA 公钥刷新任务
 	s.AddTask(tasks.NewRSARefreshTask(container.RSAKeyService))
 
-	// 添加数据预热任务
-	s.AddTask(tasks.NewDataPrewarmTask(
-		container.UserQuery,
-		container.GradeModule.GetService(),
-		container.CourseModule.GetService(),
-		container.ExamModule.GetService(),
-	))
-
 	// 添加重置绑定计数任务（每月1号凌晨执行）
 	s.AddTask(tasks.NewResetBindCountTask(container.DB))
+
+	// 添加用户数据自动同步任务（每天凌晨2点执行）
+	s.AddTask(tasks.NewUserSyncTask(
+		container.UserModule.GetRepository(),
+		container.SessionService,
+		container.ReconciliationModule.GetService(),
+	))
 
 	return s
 }
