@@ -1560,12 +1560,13 @@ func (s *service) updateStudentGPARanking(ctx context.Context, uid int, taskID s
 		return
 	}
 
-	// 获取用户学号
-	localGrades, _ := s.repo.GetGradesByUid(ctx, uid)
-	if len(localGrades) == 0 {
-		return
+	// 获取用户学号（从用户表获取）
+	var sid string
+	if s.userQuery != nil {
+		if user, err := s.userQuery.GetUserByUid(ctx, uid); err == nil {
+			sid = user.Sid
+		}
 	}
-	sid := localGrades[0].SerialNo
 
 	// 构建基础信息（包含姓名）
 	baseInfo := &ranking.StudentGPAData{
