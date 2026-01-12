@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Repository 排名数据仓储接口
@@ -32,32 +33,32 @@ func NewRepository(db *gorm.DB) Repository {
 	return &repository{db: db}
 }
 
-// UpsertGPA 插入或更新GPA数据
+// UpsertGPA 插入或更新GPA数据（使用 ON DUPLICATE KEY UPDATE）
 func (r *repository) UpsertGPA(ctx context.Context, gpa *StudentGPA) error {
-	return r.db.WithContext(ctx).
-		Where("uid = ? AND statistics_type = ? AND statistics_term = ?",
-			gpa.Uid, gpa.StatisticsType, gpa.StatisticsTerm).
-		Assign(gpa).
-		FirstOrCreate(gpa).Error
+	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "uid"}, {Name: "statistics_type"}, {Name: "statistics_term"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"sid", "name", "college", "major", "grade", "class",
+			"gpa", "avg_score", "total_credit", "completed_courses",
+			"updated_at",
+		}),
+	}).Create(gpa).Error
 }
 
-// BatchUpsertGPAs 批量插入或更新GPA数据
+// BatchUpsertGPAs 批量插入或更新GPA数据（使用 ON DUPLICATE KEY UPDATE）
 func (r *repository) BatchUpsertGPAs(ctx context.Context, gpas []*StudentGPA) error {
 	if len(gpas) == 0 {
 		return nil
 	}
 
-	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		for _, gpa := range gpas {
-			if err := tx.Where("uid = ? AND statistics_type = ? AND statistics_term = ?",
-				gpa.Uid, gpa.StatisticsType, gpa.StatisticsTerm).
-				Assign(gpa).
-				FirstOrCreate(gpa).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "uid"}, {Name: "statistics_type"}, {Name: "statistics_term"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"sid", "name", "college", "major", "grade", "class",
+			"gpa", "avg_score", "total_credit", "completed_courses",
+			"updated_at",
+		}),
+	}).CreateInBatches(gpas, 100).Error
 }
 
 // GetRankingByUid 根据uid获取排名数据（实时计算排名，只与同年级比较，按学号去重）

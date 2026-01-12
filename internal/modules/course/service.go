@@ -3,6 +3,7 @@ package course
 import (
 	"context"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -17,18 +18,36 @@ import (
 	"github.com/PuerkitoBio/goquery"
 )
 
+// CourseRepository 课表数据访问接口（用于离线查询）
+type CourseRepository interface {
+	GetCoursesByUidTermWeek(ctx context.Context, uid int, term string, week int) (*WeekSchedule, error)
+}
+
+// ReconciliationTrigger 对账触发器接口（避免循环依赖）
+type ReconciliationTrigger interface {
+	TriggerCourseSync(ctx context.Context, uid int)
+}
+
 // Service 课程服务接口
 type Service interface {
 	GetCourseTableByWeek(ctx context.Context, uid int, week int, term string) (*WeekSchedule, error)
+	// GetCourseTableByWeekForSync 获取课表（供对账模块使用，不触发递归同步）
+	GetCourseTableByWeekForSync(ctx context.Context, uid int, week int, term string) (*WeekSchedule, error)
+	// SetCourseRepository 设置课表仓储（用于延迟注入）
+	SetCourseRepository(repo CourseRepository)
+	// SetReconciliationTrigger 设置对账触发器（用于延迟注入）
+	SetReconciliationTrigger(trigger ReconciliationTrigger)
 }
 
 // courseService 课程服务实现
 type courseService struct {
-	userQuery      shared.UserQuery
-	sessionService service.SessionService
-	crawlerService service.CrawlerService
-	userDataCache  cache.UserDataCache
-	courseURL      string
+	userQuery             shared.UserQuery
+	sessionService        service.SessionService
+	crawlerService        service.CrawlerService
+	userDataCache         cache.UserDataCache
+	courseRepo            CourseRepository
+	reconciliationTrigger ReconciliationTrigger
+	courseURL             string
 }
 
 // NewService 创建课程服务
@@ -48,7 +67,19 @@ func NewService(
 	}
 }
 
+// SetCourseRepository 设置课表仓储（用于延迟注入）
+func (s *courseService) SetCourseRepository(repo CourseRepository) {
+	s.courseRepo = repo
+}
+
+// SetReconciliationTrigger 设置对账触发器
+func (s *courseService) SetReconciliationTrigger(trigger ReconciliationTrigger) {
+	s.reconciliationTrigger = trigger
+}
+
 // GetCourseTableByWeek 获取指定周的课程表
+// 策略：先尝试从教务系统获取（2秒超时），超时则返回数据库数据
+// 注意：登录失败等认证错误不降级，直接返回错误
 func (s *courseService) GetCourseTableByWeek(ctx context.Context, uid int, week int, term string) (*WeekSchedule, error) {
 	// 校验参数
 	if week > 20 || week < 1 {
@@ -80,10 +111,77 @@ func (s *courseService) GetCourseTableByWeek(ctx context.Context, uid int, week 
 		return &cachedSchedule, nil
 	}
 
-	// 获取或创建会话
-	cookies, err := s.getCookiesOrLogin(ctx, uid, user.Sid, user.Spwd)
+	// 创建带 2 秒超时的上下文
+	timeoutCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	// 尝试从教务系统获取
+	schedule, err := s.fetchCourseTableFromJwc(timeoutCtx, uid, user.Sid, user.Spwd, week, term)
+
+	if err == nil {
+		// 成功从教务系统获取，异步触发对账更新
+		s.triggerAsyncReconciliation(uid)
+		return schedule, nil
+	}
+
+	// 判断错误类型：登录失败/认证错误不降级，直接返回错误
+	if s.isAuthenticationError(err) {
+		log.Printf("[GetCourseTableByWeek] 认证错误，清除绑定信息：uid=%d, err=%v", uid, err)
+		// 清除用户的教务系统绑定
+		if clearErr := s.userQuery.ClearJwcBinding(ctx, uid); clearErr != nil {
+			log.Printf("[GetCourseTableByWeek] 清除绑定信息失败：uid=%d, err=%v", uid, clearErr)
+		}
+		return nil, err
+	}
+
+	// 超时或网络错误，尝试从数据库获取
+	log.Printf("[GetCourseTableByWeek] 教务系统请求超时/网络错误，尝试从数据库获取：uid=%d, err=%v", uid, err)
+
+	dbSchedule, dbErr := s.getCourseTableFromDatabase(ctx, uid, term, week)
+	if dbErr == nil && dbSchedule != nil {
+		return dbSchedule, nil
+	}
+
+	// 数据库也没有数据，返回原始错误
+	return nil, err
+}
+
+// GetCourseTableByWeekForSync 获取课表（供对账模块使用，不触发递归同步）
+func (s *courseService) GetCourseTableByWeekForSync(ctx context.Context, uid int, week int, term string) (*WeekSchedule, error) {
+	// 校验参数
+	if week > 20 || week < 1 {
+		return nil, common.NewAppError(common.CodeJwcInvalidParams, "周次必须在1-20之间")
+	}
+
+	if term == "" {
+		return nil, common.NewAppError(common.CodeJwcInvalidParams, "学期不能为空")
+	}
+
+	re := regexp.MustCompile(`^\d{4}-\d{4}-[12]$`)
+	if !re.MatchString(term) {
+		return nil, common.NewAppError(common.CodeJwcInvalidParams, "学期格式错误")
+	}
+
+	// 获取用户信息
+	user, err := s.userQuery.GetUserByUid(ctx, uid)
 	if err != nil {
-		return nil, common.NewAppError(common.CodeJwcLoginFailed, "获取cookie失败")
+		return nil, common.NewAppError(common.CodeUserNotFound, "用户不存在")
+	}
+
+	if user.Sid == "" || user.Spwd == "" {
+		return nil, common.NewAppError(common.CodeJwcNotBound, "未绑定教务系统账号")
+	}
+
+	// 直接从教务系统获取，不触发同步
+	return s.fetchCourseTableFromJwc(ctx, uid, user.Sid, user.Spwd, week, term)
+}
+
+// fetchCourseTableFromJwc 从教务系统获取课表
+func (s *courseService) fetchCourseTableFromJwc(ctx context.Context, uid int, sid, spwd string, week int, term string) (*WeekSchedule, error) {
+	// 获取会话
+	cookies, err := s.getCookiesOrLogin(ctx, uid, sid, spwd)
+	if err != nil {
+		return nil, err
 	}
 
 	// 构造请求
@@ -108,6 +206,65 @@ func (s *courseService) GetCourseTableByWeek(ctx context.Context, uid int, week 
 	_ = s.userDataCache.CacheCourseTable(ctx, uid, term, week, schedule, time.Hour)
 
 	return schedule, nil
+}
+
+// getCourseTableFromDatabase 从数据库获取课表
+func (s *courseService) getCourseTableFromDatabase(ctx context.Context, uid int, term string, week int) (*WeekSchedule, error) {
+	if s.courseRepo == nil {
+		return nil, common.NewAppError(common.CodeInternalError, "课表仓储未配置")
+	}
+
+	schedule, err := s.courseRepo.GetCoursesByUidTermWeek(ctx, uid, term, week)
+	if err != nil {
+		return nil, err
+	}
+
+	return schedule, nil
+}
+
+// isAuthenticationError 判断是否是认证相关错误
+func (s *courseService) isAuthenticationError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if appErr, ok := err.(*common.AppError); ok {
+		switch appErr.Code {
+		case common.CodeJwcLoginFailed,
+			common.CodeJwcNotBound,
+			common.CodeUnauthorized:
+			return true
+		}
+	}
+
+	errMsg := err.Error()
+	authKeywords := []string{
+		"登录失败",
+		"密码错误",
+		"账号被锁",
+		"未绑定",
+		"认证失败",
+		"用户名或密码",
+	}
+	for _, keyword := range authKeywords {
+		if strings.Contains(errMsg, keyword) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// triggerAsyncReconciliation 异步触发对账更新
+func (s *courseService) triggerAsyncReconciliation(uid int) {
+	if s.reconciliationTrigger == nil {
+		return
+	}
+
+	go func() {
+		ctx := context.Background()
+		s.reconciliationTrigger.TriggerCourseSync(ctx, uid)
+	}()
 }
 
 // getCookiesOrLogin 获取缓存的 cookies 或登录

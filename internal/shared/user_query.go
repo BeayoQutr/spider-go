@@ -16,6 +16,7 @@ var (
 type UserInfo struct {
 	Uid   int    `gorm:"column:uid"`
 	Email string `gorm:"column:email"`
+	Name  string `gorm:"column:name"` // 姓名
 	Sid   string `gorm:"column:sid"`  // 学号
 	Spwd  string `gorm:"column:spwd"` // 教务系统密码
 }
@@ -33,6 +34,8 @@ type UserQuery interface {
 	GetAllUserEmails(ctx context.Context) ([]string, error)
 	// GetAllBoundUsers 获取所有已绑定教务系统的用户
 	GetAllBoundUsers(ctx context.Context) ([]UserInfo, error)
+	// ClearJwcBinding 清除用户教务系统绑定
+	ClearJwcBinding(ctx context.Context, uid int) error
 }
 
 // userQuery 用户查询实现
@@ -78,4 +81,14 @@ func (q *userQuery) GetAllBoundUsers(ctx context.Context) ([]UserInfo, error) {
 		return nil, err
 	}
 	return users, nil
+}
+
+// ClearJwcBinding 清除用户教务系统绑定
+func (q *userQuery) ClearJwcBinding(ctx context.Context, uid int) error {
+	return q.db.WithContext(ctx).Model(&UserInfo{}).
+		Where("uid = ?", uid).
+		Updates(map[string]interface{}{
+			"sid":  "",
+			"spwd": "",
+		}).Error
 }

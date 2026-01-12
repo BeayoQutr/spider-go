@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"spider-go/internal/cache"
 	"spider-go/internal/modules/course"
 	"spider-go/internal/modules/exam"
 	"spider-go/internal/modules/grade"
 	"spider-go/internal/modules/ranking"
+	"spider-go/internal/shared"
 	"spider-go/pkg/errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -45,6 +48,7 @@ type service struct {
 	courseService  course.Service
 	configCache    cache.ConfigCache
 	rankingService ranking.Service
+	userQuery      shared.UserQuery // 用于清除绑定
 }
 
 // NewService 创建对账服务
@@ -57,6 +61,11 @@ func NewService(repo Repository, gradeService grade.Service, examService exam.Se
 		rankingService: rankingService,
 		configCache:    configCache,
 	}
+}
+
+// SetUserQuery 设置用户查询接口（用于延迟注入，避免循环依赖）
+func (s *service) SetUserQuery(userQuery shared.UserQuery) {
+	s.userQuery = userQuery
 }
 
 // SyncUser 同步单个用户
@@ -141,11 +150,23 @@ func (s *service) syncGrades(ctx context.Context, task *SyncTask, uids []int) er
 	for _, uid := range uids {
 		task.ProcessedUsers++
 
-		// 从教务系统获取成绩
-		gradeData, _, err := s.gradeService.GetAllGrades(ctx, uid)
+		// 从教务系统获取成绩（使用不触发同步的方法，避免递归）
+		gradeData, _, err := s.gradeService.GetAllGradesForSync(ctx, uid)
 		if err != nil {
 			task.FailedUsers++
 			logs = append(logs, s.createErrorLog(task.TaskID, uid, "grade", "", err))
+
+			// 检查是否是认证错误，如果是则清除绑定
+			if s.isAuthenticationError(err) {
+				log.Printf("[syncGrades] 用户 %d 登录失败，清除绑定信息: %v", uid, err)
+				if s.userQuery != nil {
+					if clearErr := s.userQuery.ClearJwcBinding(ctx, uid); clearErr != nil {
+						log.Printf("[syncGrades] 清除用户 %d 绑定信息失败: %v", uid, clearErr)
+					} else {
+						log.Printf("[syncGrades] 已清除用户 %d 的教务系统绑定", uid)
+					}
+				}
+			}
 			continue
 		}
 
@@ -248,11 +269,23 @@ func (s *service) syncRegularGrades(ctx context.Context, task *SyncTask, uids []
 	for _, uid := range uids {
 		task.ProcessedUsers++
 
-		// 先获取用户的所有成绩,从成绩中提取 term 和 code
-		grades, _, err := s.gradeService.GetAllGrades(ctx, uid)
+		// 先获取用户的所有成绩,从成绩中提取 term 和 code（使用不触发同步的方法，避免递归）
+		grades, _, err := s.gradeService.GetAllGradesForSync(ctx, uid)
 		if err != nil {
 			task.FailedUsers++
 			logs = append(logs, s.createErrorLog(task.TaskID, uid, "regular_grade", "", err))
+
+			// 检查是否是认证错误，如果是则清除绑定
+			if s.isAuthenticationError(err) {
+				log.Printf("[syncRegularGrades] 用户 %d 登录失败，清除绑定信息: %v", uid, err)
+				if s.userQuery != nil {
+					if clearErr := s.userQuery.ClearJwcBinding(ctx, uid); clearErr != nil {
+						log.Printf("[syncRegularGrades] 清除用户 %d 绑定信息失败: %v", uid, clearErr)
+					} else {
+						log.Printf("[syncRegularGrades] 已清除用户 %d 的教务系统绑定", uid)
+					}
+				}
+			}
 			continue
 		}
 
@@ -397,10 +430,24 @@ func (s *service) syncExams(ctx context.Context, task *SyncTask, uids []int) err
 
 		// 循环获取多个学期的考试数据
 		for _, term := range terms {
-			// 从教务系统获取该学期考试
-			examData, err := s.examService.GetAllExams(ctx, uid, term)
+			// 从教务系统获取该学期考试（使用 ForSync 方法避免递归）
+			examData, err := s.examService.GetAllExamsForSync(ctx, uid, term)
 			if err != nil {
-				// 如果某个学期获取失败，记录但不中断整个同步
+				// 检查是否是认证错误
+				if s.isAuthenticationError(err) {
+					log.Printf("[syncExams] 用户 %d 登录失败，清除绑定信息: %v", uid, err)
+					if s.userQuery != nil {
+						if clearErr := s.userQuery.ClearJwcBinding(ctx, uid); clearErr != nil {
+							log.Printf("[syncExams] 清除用户 %d 绑定信息失败: %v", uid, clearErr)
+						} else {
+							log.Printf("[syncExams] 已清除用户 %d 的教务系统绑定", uid)
+						}
+					}
+					task.FailedUsers++
+					logs = append(logs, s.createErrorLog(task.TaskID, uid, "exam", fmt.Sprintf("term:%s auth_error", term), err))
+					break // 认证错误时跳出学期循环
+				}
+				// 如果某个学期获取失败（非认证错误），记录但不中断整个同步
 				logs = append(logs, s.createErrorLog(task.TaskID, uid, "exam", fmt.Sprintf("term:%s", term), err))
 				continue
 			}
@@ -487,11 +534,23 @@ func (s *service) syncLevelExams(ctx context.Context, task *SyncTask, uids []int
 	for _, uid := range uids {
 		task.ProcessedUsers++
 
-		// 从教务系统获取等级考试成绩
-		levelExamData, err := s.gradeService.GetLevelGrades(ctx, uid)
+		// 从教务系统获取等级考试成绩（使用 ForSync 方法避免递归）
+		levelExamData, err := s.gradeService.GetLevelGradesForSync(ctx, uid)
 		if err != nil {
 			task.FailedUsers++
 			logs = append(logs, s.createErrorLog(task.TaskID, uid, "level_exam", "", err))
+
+			// 检查是否是认证错误，如果是则清除绑定
+			if s.isAuthenticationError(err) {
+				log.Printf("[syncLevelExams] 用户 %d 登录失败，清除绑定信息: %v", uid, err)
+				if s.userQuery != nil {
+					if clearErr := s.userQuery.ClearJwcBinding(ctx, uid); clearErr != nil {
+						log.Printf("[syncLevelExams] 清除用户 %d 绑定信息失败: %v", uid, clearErr)
+					} else {
+						log.Printf("[syncLevelExams] 已清除用户 %d 的教务系统绑定", uid)
+					}
+				}
+			}
 			continue
 		}
 
@@ -606,11 +665,27 @@ func (s *service) syncCourses(ctx context.Context, task *SyncTask, uids []int) e
 		courses := make([]*Course, 0)
 
 		// 循环获取20周的课表
+		authFailed := false
 		for week := 1; week <= 20; week++ {
-			// 从教务系统获取该周课表
-			schedule, err := s.courseService.GetCourseTableByWeek(ctx, uid, week, currentTerm)
+			// 从教务系统获取该周课表（使用 ForSync 方法避免递归）
+			schedule, err := s.courseService.GetCourseTableByWeekForSync(ctx, uid, week, currentTerm)
 			if err != nil {
-				// 如果某周获取失败，记录但不中断整个同步
+				// 检查是否是认证错误
+				if s.isAuthenticationError(err) {
+					log.Printf("[syncCourses] 用户 %d 登录失败，清除绑定信息: %v", uid, err)
+					if s.userQuery != nil {
+						if clearErr := s.userQuery.ClearJwcBinding(ctx, uid); clearErr != nil {
+							log.Printf("[syncCourses] 清除用户 %d 绑定信息失败: %v", uid, clearErr)
+						} else {
+							log.Printf("[syncCourses] 已清除用户 %d 的教务系统绑定", uid)
+						}
+					}
+					task.FailedUsers++
+					logs = append(logs, s.createErrorLog(task.TaskID, uid, "course", fmt.Sprintf("term:%s-week:%d auth_error", currentTerm, week), err))
+					authFailed = true
+					break // 认证错误时跳出周循环
+				}
+				// 如果某周获取失败（非认证错误），记录但不中断整个同步
 				logs = append(logs, s.createErrorLog(task.TaskID, uid, "course", fmt.Sprintf("term:%s-week:%d", currentTerm, week), err))
 				continue
 			}
@@ -659,6 +734,11 @@ func (s *service) syncCourses(ctx context.Context, task *SyncTask, uids []int) e
 			}
 		}
 
+		// 如果认证失败，跳过数据库更新
+		if authFailed {
+			continue
+		}
+
 		// 标记删除的记录(只删除当前学期的旧数据)
 		for key, local := range localCourseMap {
 			if local.Term == currentTerm && !remoteCourseMap[key] {
@@ -693,35 +773,598 @@ func (s *service) syncCourses(ctx context.Context, task *SyncTask, uids []int) e
 	return nil
 }
 
-// syncAll 全量同步
+// syncAll 全量同步（按用户逐个同步所有数据类型）
 func (s *service) syncAll(ctx context.Context, task *SyncTask, uids []int) error {
-	var allErrors []error
+	logs := make([]*SyncLog, 0)
+	newVersion := int(time.Now().Unix())
 
-	if err := s.syncGrades(ctx, task, uids); err != nil {
-		allErrors = append(allErrors, fmt.Errorf("同步成绩失败: %w", err))
+	// 获取当前学期和最近3个学期
+	currentTerm, err := s.configCache.GetCurrentTerm(ctx)
+	if err != nil {
+		return fmt.Errorf("获取当前学期失败: %w", err)
 	}
 
-	if err := s.syncRegularGrades(ctx, task, uids); err != nil {
-		allErrors = append(allErrors, fmt.Errorf("同步平时分失败: %w", err))
+	terms, err := s.configCache.GetPreviousTerms(ctx, 3)
+	if err != nil {
+		return fmt.Errorf("获取学期列表失败: %w", err)
 	}
 
-	if err := s.syncExams(ctx, task, uids); err != nil {
-		allErrors = append(allErrors, fmt.Errorf("同步考试失败: %w", err))
+	// 按用户逐个同步
+	for _, uid := range uids {
+		task.ProcessedUsers++
+
+		// 同步该用户的所有数据类型
+		userLogs, authFailed := s.syncUserAllData(ctx, task, uid, newVersion, currentTerm, terms)
+		logs = append(logs, userLogs...)
+
+		if authFailed {
+			task.FailedUsers++
+		} else {
+			task.SuccessUsers++
+		}
 	}
 
-	if err := s.syncLevelExams(ctx, task, uids); err != nil {
-		allErrors = append(allErrors, fmt.Errorf("同步等级考试失败: %w", err))
+	// 批量保存日志
+	if len(logs) > 0 {
+		s.repo.BatchCreateLogs(ctx, logs)
 	}
 
-	if err := s.syncCourses(ctx, task, uids); err != nil {
-		allErrors = append(allErrors, fmt.Errorf("同步课表失败: %w", err))
-	}
-
-	if len(allErrors) > 0 {
-		return fmt.Errorf("全量同步部分失败: %v", allErrors)
-	}
-
+	s.repo.UpdateTask(ctx, task)
 	return nil
+}
+
+// syncUserAllData 同步单个用户的所有数据类型
+// 返回日志列表和是否认证失败
+func (s *service) syncUserAllData(ctx context.Context, task *SyncTask, uid int, newVersion int, currentTerm string, terms []string) ([]*SyncLog, bool) {
+	logs := make([]*SyncLog, 0)
+	syncedItems := make([]string, 0)
+
+	// 获取用户信息（用于日志）- 优先从学籍卡片获取真实姓名
+	var userName, userSid string
+	if userInfo, err := s.gradeService.GetUserGradeMajorClass(ctx, uid); err == nil && userInfo.Name != "" {
+		userName = userInfo.Name
+	}
+	// 获取学号
+	if s.userQuery != nil {
+		if userInfo, err := s.userQuery.GetUserByUid(ctx, uid); err == nil {
+			userSid = userInfo.Sid
+		}
+	}
+
+	// 1. 同步成绩
+	gradeLogs, authFailed := s.syncUserGrades(ctx, task, uid, newVersion)
+	logs = append(logs, gradeLogs...)
+	if authFailed {
+		log.Printf("[syncUserAllData] 同步失败 uid=%d 姓名=%s 学号=%s 原因=认证失败", uid, userName, userSid)
+		return logs, true
+	}
+	syncedItems = append(syncedItems, "成绩")
+
+	// 2. 同步平时分
+	regularGradeLogs, authFailed := s.syncUserRegularGrades(ctx, task, uid, newVersion)
+	logs = append(logs, regularGradeLogs...)
+	if authFailed {
+		log.Printf("[syncUserAllData] 同步失败 uid=%d 姓名=%s 学号=%s 原因=认证失败", uid, userName, userSid)
+		return logs, true
+	}
+	syncedItems = append(syncedItems, "平时分")
+
+	// 3. 同步考试安排
+	examLogs, authFailed := s.syncUserExams(ctx, task, uid, newVersion, terms)
+	logs = append(logs, examLogs...)
+	if authFailed {
+		log.Printf("[syncUserAllData] 同步失败 uid=%d 姓名=%s 学号=%s 原因=认证失败", uid, userName, userSid)
+		return logs, true
+	}
+	syncedItems = append(syncedItems, "考试安排")
+
+	// 4. 同步等级考试
+	levelExamLogs, authFailed := s.syncUserLevelExams(ctx, task, uid, newVersion)
+	logs = append(logs, levelExamLogs...)
+	if authFailed {
+		log.Printf("[syncUserAllData] 同步失败 uid=%d 姓名=%s 学号=%s 原因=认证失败", uid, userName, userSid)
+		return logs, true
+	}
+	syncedItems = append(syncedItems, "等级考试")
+
+	// 5. 同步课表
+	courseLogs, authFailed := s.syncUserCourses(ctx, task, uid, newVersion, currentTerm)
+	logs = append(logs, courseLogs...)
+	if authFailed {
+		log.Printf("[syncUserAllData] 同步失败 uid=%d 姓名=%s 学号=%s 原因=认证失败", uid, userName, userSid)
+		return logs, true
+	}
+	syncedItems = append(syncedItems, "课表")
+
+	// 打印同步完成日志
+	log.Printf("[syncUserAllData] 同步完成 uid=%d 姓名=%s 学号=%s 同步项目=[%s]",
+		uid, userName, userSid, strings.Join(syncedItems, ", "))
+
+	return logs, false
+}
+
+// syncUserGrades 同步单个用户的成绩
+func (s *service) syncUserGrades(ctx context.Context, task *SyncTask, uid int, newVersion int) ([]*SyncLog, bool) {
+	logs := make([]*SyncLog, 0)
+
+	// 从教务系统获取成绩
+	gradeData, _, err := s.gradeService.GetAllGradesForSync(ctx, uid)
+	if err != nil {
+		logs = append(logs, s.createErrorLog(task.TaskID, uid, "grade", "", err))
+
+		if s.isAuthenticationError(err) {
+			log.Printf("[syncUserGrades] 用户 %d 登录失败，清除绑定信息: %v", uid, err)
+			if s.userQuery != nil {
+				if clearErr := s.userQuery.ClearJwcBinding(ctx, uid); clearErr != nil {
+					log.Printf("[syncUserGrades] 清除用户 %d 绑定信息失败: %v", uid, clearErr)
+				} else {
+					log.Printf("[syncUserGrades] 已清除用户 %d 的教务系统绑定", uid)
+				}
+			}
+			return logs, true
+		}
+		return logs, false
+	}
+
+	// 获取本地已有成绩
+	localGrades, _ := s.repo.GetGradesByUid(ctx, uid)
+	localGradeMap := make(map[string]*Grade)
+	for _, g := range localGrades {
+		key := fmt.Sprintf("%s-%s", g.Term, g.Code)
+		localGradeMap[key] = g
+	}
+
+	// 对账并更新
+	remoteGradeMap := make(map[string]bool)
+	grades := make([]*Grade, 0)
+
+	for _, remote := range gradeData {
+		key := fmt.Sprintf("%s-%s", remote.Term, remote.Code)
+		remoteGradeMap[key] = true
+
+		local, exists := localGradeMap[key]
+
+		newGrade := &Grade{
+			Uid:            uid,
+			SerialNo:       remote.SerialNo,
+			Term:           remote.Term,
+			Code:           remote.Code,
+			Subject:        remote.Subject,
+			Score:          remote.Score,
+			Credit:         remote.Credit,
+			Gpa:            remote.Gpa,
+			Status:         remote.Status,
+			Property:       remote.Property,
+			Flag:           remote.Flag,
+			SyncVersion:    newVersion,
+			LastSyncTaskID: task.TaskID,
+		}
+		now := time.Now()
+		newGrade.LastSyncAt = &now
+
+		if !exists {
+			task.NewRecords++
+			logs = append(logs, s.createLog(task.TaskID, uid, "grade", key, SyncActionInsert, nil, newGrade, true, ""))
+		} else if s.gradeChanged(local, newGrade) {
+			task.UpdatedRecords++
+			logs = append(logs, s.createLog(task.TaskID, uid, "grade", key, SyncActionUpdate, local, newGrade, true, ""))
+		} else {
+			task.UnchangedRecords++
+			newGrade.ID = local.ID
+		}
+
+		grades = append(grades, newGrade)
+	}
+
+	// 标记删除的记录
+	for key, local := range localGradeMap {
+		if !remoteGradeMap[key] {
+			task.DeletedRecords++
+			logs = append(logs, s.createLog(task.TaskID, uid, "grade", key, SyncActionDelete, local, nil, true, ""))
+			s.repo.DeleteGradesByUidAndTerm(ctx, uid, local.Term)
+		}
+	}
+
+	// 批量更新数据库
+	if err := s.repo.BatchUpsertGrades(ctx, grades); err != nil {
+		logs = append(logs, s.createErrorLog(task.TaskID, uid, "grade", "", err))
+		return logs, false
+	}
+
+	// 更新用户同步状态
+	if err := s.repo.UpdateGradeSyncStatus(ctx, uid, task.TaskID, newVersion); err != nil {
+		logs = append(logs, s.createErrorLog(task.TaskID, uid, "grade_sync_status", "", err))
+	}
+
+	// 更新GPA排名
+	s.updateStudentGPARanking(ctx, uid, task.TaskID)
+
+	return logs, false
+}
+
+// syncUserRegularGrades 同步单个用户的平时分
+func (s *service) syncUserRegularGrades(ctx context.Context, task *SyncTask, uid int, newVersion int) ([]*SyncLog, bool) {
+	logs := make([]*SyncLog, 0)
+
+	// 先获取用户的所有成绩
+	grades, _, err := s.gradeService.GetAllGradesForSync(ctx, uid)
+	if err != nil {
+		logs = append(logs, s.createErrorLog(task.TaskID, uid, "regular_grade", "", err))
+
+		if s.isAuthenticationError(err) {
+			log.Printf("[syncUserRegularGrades] 用户 %d 登录失败，清除绑定信息: %v", uid, err)
+			if s.userQuery != nil {
+				if clearErr := s.userQuery.ClearJwcBinding(ctx, uid); clearErr != nil {
+					log.Printf("[syncUserRegularGrades] 清除用户 %d 绑定信息失败: %v", uid, clearErr)
+				} else {
+					log.Printf("[syncUserRegularGrades] 已清除用户 %d 的教务系统绑定", uid)
+				}
+			}
+			return logs, true
+		}
+		return logs, false
+	}
+
+	if len(grades) == 0 {
+		return logs, false
+	}
+
+	// 获取本地已有平时分
+	localRegularGrades, _ := s.repo.GetRegularGradesByUid(ctx, uid)
+	localRegularGradeMap := make(map[string]*RegularGrade)
+	for _, rg := range localRegularGrades {
+		key := fmt.Sprintf("%s-%s", rg.Term, rg.Code)
+		localRegularGradeMap[key] = rg
+	}
+
+	// 对账并更新
+	remoteRegularGradeMap := make(map[string]bool)
+	regularGrades := make([]*RegularGrade, 0)
+
+	for _, grade := range grades {
+		regularGrade, err := s.gradeService.GetRegularGrades(ctx, uid, grade.Term, grade.Code)
+		if err != nil {
+			continue
+		}
+
+		if regularGrade.FinalExamScore == "" && regularGrade.RegularScore == "" && regularGrade.FinalScore == "" {
+			continue
+		}
+
+		key := fmt.Sprintf("%s-%s", grade.Term, grade.Code)
+		remoteRegularGradeMap[key] = true
+
+		local, exists := localRegularGradeMap[key]
+
+		newRegularGrade := &RegularGrade{
+			Uid:            uid,
+			Term:           grade.Term,
+			Code:           grade.Code,
+			Subject:        grade.Subject,
+			FinalExamScore: regularGrade.FinalExamScore,
+			FinalExamRatio: regularGrade.FinalExamRatio,
+			RegularScore:   regularGrade.RegularScore,
+			RegularRatio:   regularGrade.RegularRatio,
+			FinalScore:     regularGrade.FinalScore,
+			SyncVersion:    newVersion,
+			LastSyncTaskID: task.TaskID,
+		}
+		now := time.Now()
+		newRegularGrade.LastSyncAt = &now
+
+		if !exists {
+			task.NewRecords++
+			logs = append(logs, s.createLog(task.TaskID, uid, "regular_grade", key, SyncActionInsert, nil, newRegularGrade, true, ""))
+		} else if s.regularGradeChanged(local, newRegularGrade) {
+			task.UpdatedRecords++
+			logs = append(logs, s.createLog(task.TaskID, uid, "regular_grade", key, SyncActionUpdate, local, newRegularGrade, true, ""))
+		} else {
+			task.UnchangedRecords++
+			newRegularGrade.ID = local.ID
+		}
+
+		regularGrades = append(regularGrades, newRegularGrade)
+	}
+
+	if len(regularGrades) == 0 {
+		return logs, false
+	}
+
+	// 标记删除的记录
+	for key, local := range localRegularGradeMap {
+		if !remoteRegularGradeMap[key] {
+			task.DeletedRecords++
+			logs = append(logs, s.createLog(task.TaskID, uid, "regular_grade", key, SyncActionDelete, local, nil, true, ""))
+			s.repo.DeleteGradesByUidAndTerm(ctx, uid, local.Term)
+		}
+	}
+
+	// 批量更新数据库
+	if err := s.repo.BatchUpsertRegularGrades(ctx, regularGrades); err != nil {
+		logs = append(logs, s.createErrorLog(task.TaskID, uid, "regular_grade", "", err))
+		return logs, false
+	}
+
+	// 更新用户同步状态
+	if err := s.repo.UpdateRegularGradeSyncStatus(ctx, uid, task.TaskID, newVersion); err != nil {
+		logs = append(logs, s.createErrorLog(task.TaskID, uid, "regular_grade_sync_status", "", err))
+	}
+
+	return logs, false
+}
+
+// syncUserExams 同步单个用户的考试安排
+func (s *service) syncUserExams(ctx context.Context, task *SyncTask, uid int, newVersion int, terms []string) ([]*SyncLog, bool) {
+	logs := make([]*SyncLog, 0)
+
+	// 获取本地已有考试
+	localExams, _ := s.repo.GetExamsByUid(ctx, uid)
+	localExamMap := make(map[string]*Exam)
+	for _, e := range localExams {
+		key := fmt.Sprintf("%s-%s-%s", e.Term, e.ClassName, e.Time)
+		localExamMap[key] = e
+	}
+
+	remoteExamMap := make(map[string]bool)
+	exams := make([]*Exam, 0)
+
+	for _, term := range terms {
+		examData, err := s.examService.GetAllExamsForSync(ctx, uid, term)
+		if err != nil {
+			if s.isAuthenticationError(err) {
+				log.Printf("[syncUserExams] 用户 %d 登录失败，清除绑定信息: %v", uid, err)
+				if s.userQuery != nil {
+					if clearErr := s.userQuery.ClearJwcBinding(ctx, uid); clearErr != nil {
+						log.Printf("[syncUserExams] 清除用户 %d 绑定信息失败: %v", uid, clearErr)
+					} else {
+						log.Printf("[syncUserExams] 已清除用户 %d 的教务系统绑定", uid)
+					}
+				}
+				logs = append(logs, s.createErrorLog(task.TaskID, uid, "exam", fmt.Sprintf("term:%s auth_error", term), err))
+				return logs, true
+			}
+			logs = append(logs, s.createErrorLog(task.TaskID, uid, "exam", fmt.Sprintf("term:%s", term), err))
+			continue
+		}
+
+		for _, remote := range examData {
+			key := fmt.Sprintf("%s-%s-%s", term, remote.ClassName, remote.Time)
+			remoteExamMap[key] = true
+
+			local, exists := localExamMap[key]
+
+			newExam := &Exam{
+				Uid:            uid,
+				Term:           term,
+				SerialNo:       remote.SerialNo,
+				ClassNo:        remote.ClassNo,
+				ClassName:      remote.ClassName,
+				Time:           remote.Time,
+				Place:          remote.Place,
+				Execution:      remote.Execution,
+				SyncVersion:    newVersion,
+				LastSyncTaskID: task.TaskID,
+			}
+			now := time.Now()
+			newExam.LastSyncAt = &now
+
+			if !exists {
+				task.NewRecords++
+				logs = append(logs, s.createLog(task.TaskID, uid, "exam", key, SyncActionInsert, nil, newExam, true, ""))
+			} else if s.examChanged(local, newExam) {
+				task.UpdatedRecords++
+				logs = append(logs, s.createLog(task.TaskID, uid, "exam", key, SyncActionUpdate, local, newExam, true, ""))
+			} else {
+				task.UnchangedRecords++
+				newExam.ID = local.ID
+			}
+
+			exams = append(exams, newExam)
+		}
+	}
+
+	// 标记删除的记录
+	for key, local := range localExamMap {
+		if !remoteExamMap[key] {
+			task.DeletedRecords++
+			logs = append(logs, s.createLog(task.TaskID, uid, "exam", key, SyncActionDelete, local, nil, true, ""))
+		}
+	}
+
+	// 批量更新数据库
+	if err := s.repo.BatchUpsertExams(ctx, exams); err != nil {
+		logs = append(logs, s.createErrorLog(task.TaskID, uid, "exam", "", err))
+		return logs, false
+	}
+
+	// 更新用户同步状态
+	if err := s.repo.UpdateExamSyncStatus(ctx, uid, task.TaskID, newVersion); err != nil {
+		logs = append(logs, s.createErrorLog(task.TaskID, uid, "exam_sync_status", "", err))
+	}
+
+	return logs, false
+}
+
+// syncUserLevelExams 同步单个用户的等级考试
+func (s *service) syncUserLevelExams(ctx context.Context, task *SyncTask, uid int, newVersion int) ([]*SyncLog, bool) {
+	logs := make([]*SyncLog, 0)
+
+	levelExamData, err := s.gradeService.GetLevelGradesForSync(ctx, uid)
+	if err != nil {
+		logs = append(logs, s.createErrorLog(task.TaskID, uid, "level_exam", "", err))
+
+		if s.isAuthenticationError(err) {
+			log.Printf("[syncUserLevelExams] 用户 %d 登录失败，清除绑定信息: %v", uid, err)
+			if s.userQuery != nil {
+				if clearErr := s.userQuery.ClearJwcBinding(ctx, uid); clearErr != nil {
+					log.Printf("[syncUserLevelExams] 清除用户 %d 绑定信息失败: %v", uid, clearErr)
+				} else {
+					log.Printf("[syncUserLevelExams] 已清除用户 %d 的教务系统绑定", uid)
+				}
+			}
+			return logs, true
+		}
+		return logs, false
+	}
+
+	// 获取本地已有等级考试成绩
+	localLevelExams, _ := s.repo.GetLevelExamsByUid(ctx, uid)
+	localLevelExamMap := make(map[string]*LevelExam)
+	for _, le := range localLevelExams {
+		key := fmt.Sprintf("%s-%s", le.CourseName, le.Time)
+		localLevelExamMap[key] = le
+	}
+
+	remoteLevelExamMap := make(map[string]bool)
+	levelExams := make([]*LevelExam, 0)
+
+	for _, remote := range levelExamData {
+		key := fmt.Sprintf("%s-%s", remote.CourseName, remote.Time)
+		remoteLevelExamMap[key] = true
+
+		local, exists := localLevelExamMap[key]
+
+		newLevelExam := &LevelExam{
+			Uid:            uid,
+			No:             remote.No,
+			CourseName:     remote.CourseName,
+			LevGrade:       remote.LevGrade,
+			Time:           remote.Time,
+			SyncVersion:    newVersion,
+			LastSyncTaskID: task.TaskID,
+		}
+		now := time.Now()
+		newLevelExam.LastSyncAt = &now
+
+		if !exists {
+			task.NewRecords++
+			logs = append(logs, s.createLog(task.TaskID, uid, "level_exam", key, SyncActionInsert, nil, newLevelExam, true, ""))
+		} else if s.levelExamChanged(local, newLevelExam) {
+			task.UpdatedRecords++
+			logs = append(logs, s.createLog(task.TaskID, uid, "level_exam", key, SyncActionUpdate, local, newLevelExam, true, ""))
+		} else {
+			task.UnchangedRecords++
+			newLevelExam.ID = local.ID
+		}
+
+		levelExams = append(levelExams, newLevelExam)
+	}
+
+	// 标记删除的记录
+	for key, local := range localLevelExamMap {
+		if !remoteLevelExamMap[key] {
+			task.DeletedRecords++
+			logs = append(logs, s.createLog(task.TaskID, uid, "level_exam", key, SyncActionDelete, local, nil, true, ""))
+		}
+	}
+
+	// 批量更新数据库
+	if err := s.repo.BatchUpsertLevelExams(ctx, levelExams); err != nil {
+		logs = append(logs, s.createErrorLog(task.TaskID, uid, "level_exam", "", err))
+		return logs, false
+	}
+
+	// 更新用户同步状态
+	if err := s.repo.UpdateLevelExamSyncStatus(ctx, uid, task.TaskID, newVersion); err != nil {
+		logs = append(logs, s.createErrorLog(task.TaskID, uid, "level_exam_sync_status", "", err))
+	}
+
+	return logs, false
+}
+
+// syncUserCourses 同步单个用户的课表
+func (s *service) syncUserCourses(ctx context.Context, task *SyncTask, uid int, newVersion int, currentTerm string) ([]*SyncLog, bool) {
+	logs := make([]*SyncLog, 0)
+
+	// 获取本地已有课表
+	localCourses, _ := s.repo.GetCoursesByUid(ctx, uid, "", 0)
+	localCourseMap := make(map[string]*Course)
+	for _, c := range localCourses {
+		key := fmt.Sprintf("%s-%d-%d-%d-%s", c.Term, c.Week, c.Weekday, c.StartPeriod, c.Name)
+		localCourseMap[key] = c
+	}
+
+	remoteCourseMap := make(map[string]bool)
+	courses := make([]*Course, 0)
+
+	for week := 1; week <= 20; week++ {
+		schedule, err := s.courseService.GetCourseTableByWeekForSync(ctx, uid, week, currentTerm)
+		if err != nil {
+			if s.isAuthenticationError(err) {
+				log.Printf("[syncUserCourses] 用户 %d 登录失败，清除绑定信息: %v", uid, err)
+				if s.userQuery != nil {
+					if clearErr := s.userQuery.ClearJwcBinding(ctx, uid); clearErr != nil {
+						log.Printf("[syncUserCourses] 清除用户 %d 绑定信息失败: %v", uid, clearErr)
+					} else {
+						log.Printf("[syncUserCourses] 已清除用户 %d 的教务系统绑定", uid)
+					}
+				}
+				logs = append(logs, s.createErrorLog(task.TaskID, uid, "course", fmt.Sprintf("term:%s-week:%d auth_error", currentTerm, week), err))
+				return logs, true
+			}
+			logs = append(logs, s.createErrorLog(task.TaskID, uid, "course", fmt.Sprintf("term:%s-week:%d", currentTerm, week), err))
+			continue
+		}
+
+		for _, daySchedule := range schedule.Days {
+			for _, remote := range daySchedule.Courses {
+				key := fmt.Sprintf("%s-%d-%d-%d-%s", currentTerm, week, remote.Weekday, remote.StartPeriod, remote.Name)
+				remoteCourseMap[key] = true
+
+				local, exists := localCourseMap[key]
+
+				newCourse := &Course{
+					Uid:            uid,
+					Term:           currentTerm,
+					Week:           week,
+					Weekday:        remote.Weekday,
+					Name:           remote.Name,
+					Teacher:        remote.Teacher,
+					Classroom:      remote.Classroom,
+					StartPeriod:    remote.StartPeriod,
+					EndPeriod:      remote.EndPeriod,
+					SyncVersion:    newVersion,
+					LastSyncTaskID: task.TaskID,
+				}
+				now := time.Now()
+				newCourse.LastSyncAt = &now
+
+				if !exists {
+					task.NewRecords++
+					logs = append(logs, s.createLog(task.TaskID, uid, "course", key, SyncActionInsert, nil, newCourse, true, ""))
+				} else if s.courseChanged(local, newCourse) {
+					task.UpdatedRecords++
+					logs = append(logs, s.createLog(task.TaskID, uid, "course", key, SyncActionUpdate, local, newCourse, true, ""))
+				} else {
+					task.UnchangedRecords++
+					newCourse.ID = local.ID
+				}
+
+				courses = append(courses, newCourse)
+			}
+		}
+	}
+
+	// 标记删除的记录
+	for key, local := range localCourseMap {
+		if local.Term == currentTerm && !remoteCourseMap[key] {
+			task.DeletedRecords++
+			logs = append(logs, s.createLog(task.TaskID, uid, "course", key, SyncActionDelete, local, nil, true, ""))
+		}
+	}
+
+	// 批量更新数据库
+	if err := s.repo.BatchUpsertCourses(ctx, courses); err != nil {
+		logs = append(logs, s.createErrorLog(task.TaskID, uid, "course", "", err))
+		return logs, false
+	}
+
+	// 更新用户同步状态
+	if err := s.repo.UpdateCourseSyncStatus(ctx, uid, task.TaskID, newVersion); err != nil {
+		logs = append(logs, s.createErrorLog(task.TaskID, uid, "course_sync_status", "", err))
+	}
+
+	return logs, false
 }
 
 // GetTask 获取任务详情
@@ -911,8 +1554,8 @@ func (s *service) updateStudentGPARanking(ctx context.Context, uid int, taskID s
 		return
 	}
 
-	// 获取所有成绩
-	grades, overallGPA, err := s.gradeService.GetAllGrades(ctx, uid)
+	// 获取所有成绩（使用不触发同步的方法，避免递归）
+	grades, overallGPA, err := s.gradeService.GetAllGradesForSync(ctx, uid)
 	if err != nil || overallGPA == nil || len(grades) == 0 {
 		return
 	}
@@ -1227,4 +1870,39 @@ func (s *service) TriggerGradeSync(ctx context.Context, uid int) {
 		// 直接调用同步方法，不创建完整的任务
 		s.SyncUser(bgCtx, uid, TaskTypeGrade, TriggerTypeAuto)
 	}()
+}
+
+// isAuthenticationError 判断是否是认证相关错误（登录失败等）
+func (s *service) isAuthenticationError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// 检查是否是 AppError
+	if appErr, ok := err.(*errors.AppError); ok {
+		switch appErr.Code {
+		case errors.CodeJwcLoginFailed, // 登录失败
+			errors.CodeJwcNotBound,  // 未绑定
+			errors.CodeUnauthorized: // 未授权
+			return true
+		}
+	}
+
+	// 检查错误信息是否包含登录相关关键字
+	errMsg := err.Error()
+	authKeywords := []string{
+		"登录失败",
+		"密码错误",
+		"账号被锁",
+		"未绑定",
+		"认证失败",
+		"用户名或密码",
+	}
+	for _, keyword := range authKeywords {
+		if strings.Contains(errMsg, keyword) {
+			return true
+		}
+	}
+
+	return false
 }

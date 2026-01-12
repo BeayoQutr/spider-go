@@ -328,6 +328,9 @@ func (c *Container) initModules() {
 	// 设置 Grade Module 的依赖（避免循环依赖，延迟注入）
 	c.GradeModule.SetGradeRepository(c.DB)
 	c.GradeModule.SetReconciliationTrigger(c.ReconciliationModule.GetService())
+
+	// 设置 Reconciliation Module 的 UserQuery（用于清除绑定）
+	c.ReconciliationModule.SetUserQuery(c.UserQuery)
 }
 
 // initRSAPublicKey 初始化 RSA 公钥

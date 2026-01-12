@@ -7,6 +7,7 @@ import (
 	"spider-go/internal/modules/grade"
 	"spider-go/internal/modules/ranking"
 	"spider-go/internal/modules/user"
+	"spider-go/internal/shared"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -15,18 +16,18 @@ import (
 // Module 对账模块
 type Module struct {
 	handler *Handler
-	service Service
+	service *service // 改为具体类型以便调用 SetUserQuery
 }
 
 // NewModule 创建对账模块
 func NewModule(db *gorm.DB, gradeService grade.Service, examService exam.Service, courseService course.Service, configCache cache.ConfigCache, rankingService ranking.Service) *Module {
 	repo := NewRepository(db)
-	service := NewService(repo, gradeService, examService, courseService, configCache, rankingService)
-	handler := NewHandler(service)
+	svc := NewService(repo, gradeService, examService, courseService, configCache, rankingService)
+	handler := NewHandler(svc)
 
 	return &Module{
 		handler: handler,
-		service: service,
+		service: svc.(*service), // 类型断言
 	}
 }
 
@@ -44,4 +45,9 @@ func (m *Module) RegisterAdminRoutes(r *gin.RouterGroup, userRepo user.Repositor
 // GetService 获取服务（用于其他模块注入或调度器）
 func (m *Module) GetService() Service {
 	return m.service
+}
+
+// SetUserQuery 设置用户查询接口（用于清除绑定）
+func (m *Module) SetUserQuery(userQuery shared.UserQuery) {
+	m.service.SetUserQuery(userQuery)
 }

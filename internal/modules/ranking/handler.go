@@ -1,9 +1,11 @@
 package ranking
 
 import (
+	"errors"
 	"spider-go/internal/common"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // Handler 排名处理器
@@ -62,6 +64,10 @@ func (h *Handler) GetMyRanking(c *gin.Context) {
 
 	resp, err := h.service.GetMyRanking(c.Request.Context(), uid.(int), req.StatisticsType, req.StatisticsTerm)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			common.ErrorWithAppError(c, common.NewAppError(common.CodeNotFound, "暂无排名数据，请先查询成绩后再查看排名"))
+			return
+		}
 		common.ErrorWithAppError(c, common.NewAppError(common.CodeInternalError, "获取排名失败"))
 		return
 	}

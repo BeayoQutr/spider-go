@@ -24,6 +24,7 @@ import (
 // GradeRepository 成绩数据访问接口（用于离线查询）
 type GradeRepository interface {
 	GetGradesByUid(ctx context.Context, uid int) ([]Grade, error)
+	GetLevelGradesByUid(ctx context.Context, uid int) ([]LevelGrade, error)
 }
 
 // gradeRepository 成绩仓储实现
@@ -81,6 +82,39 @@ func (r *gradeRepository) GetGradesByUid(ctx context.Context, uid int) ([]Grade,
 	return grades, nil
 }
 
+// GetLevelGradesByUid 从数据库获取用户等级考试成绩
+func (r *gradeRepository) GetLevelGradesByUid(ctx context.Context, uid int) ([]LevelGrade, error) {
+	var dbLevelGrades []struct {
+		No         string
+		CourseName string
+		LevGrade   string
+		Time       string
+	}
+
+	err := r.db.WithContext(ctx).
+		Table("level_exams").
+		Select("no, course_name, lev_grade, time").
+		Where("uid = ? AND is_deleted = ?", uid, false).
+		Order("time DESC").
+		Find(&dbLevelGrades).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	levelGrades := make([]LevelGrade, len(dbLevelGrades))
+	for i, lg := range dbLevelGrades {
+		levelGrades[i] = LevelGrade{
+			No:         lg.No,
+			CourseName: lg.CourseName,
+			LevGrade:   lg.LevGrade,
+			Time:       lg.Time,
+		}
+	}
+
+	return levelGrades, nil
+}
+
 // ReconciliationTrigger 对账触发器接口（避免循环依赖）
 type ReconciliationTrigger interface {
 	TriggerGradeSync(ctx context.Context, uid int)
@@ -89,9 +123,13 @@ type ReconciliationTrigger interface {
 // Service 成绩服务接口
 type Service interface {
 	GetAllGrades(ctx context.Context, uid int) ([]Grade, *GPA, error)
+	// GetAllGradesForSync 获取所有成绩（供对账模块使用，不触发递归同步）
+	GetAllGradesForSync(ctx context.Context, uid int) ([]Grade, *GPA, error)
 	GetGradesByTerm(ctx context.Context, uid int, term string) ([]Grade, *GPA, error)
 	GetGradesByYear(ctx context.Context, uid int, year string) ([]Grade, *GPA, error)
 	GetLevelGrades(ctx context.Context, uid int) ([]LevelGrade, error)
+	// GetLevelGradesForSync 获取等级考试成绩（供对账模块使用，不触发递归同步）
+	GetLevelGradesForSync(ctx context.Context, uid int) ([]LevelGrade, error)
 	GetRegularGrades(ctx context.Context, uid int, term string, courseId string) (*RegularGrade, error)
 	// GetRecentTermsGrades 成绩分析接口
 	GetRecentTermsGrades(ctx context.Context, uid int) (*TermsGradesAnalysis, error)
@@ -146,7 +184,8 @@ func (s *gradeService) SetReconciliationTrigger(trigger ReconciliationTrigger) {
 }
 
 // GetAllGrades 获取所有成绩
-// 策略：先尝试从教务系统获取（2秒超时），超时或失败则返回数据库数据
+// 策略：先尝试从教务系统获取（2秒超时），超时则返回数据库数据
+// 注意：登录失败等认证错误不降级，直接返回错误
 func (s *gradeService) GetAllGrades(ctx context.Context, uid int) ([]Grade, *GPA, error) {
 	// 获取用户信息
 	user, err := s.userQuery.GetUserByUid(ctx, uid)
@@ -181,8 +220,18 @@ func (s *gradeService) GetAllGrades(ctx context.Context, uid int) ([]Grade, *GPA
 		return grades, gpa, nil
 	}
 
-	// 教务系统获取失败（超时或其他错误），尝试从数据库获取
-	log.Printf("[GetAllGrades] 教务系统请求失败，尝试从数据库获取：uid=%d, err=%v", uid, err)
+	// 判断错误类型：登录失败/认证错误不降级，直接返回错误
+	if s.isAuthenticationError(err) {
+		log.Printf("[GetAllGrades] 认证错误，清除绑定信息：uid=%d, err=%v", uid, err)
+		// 清除用户的教务系统绑定
+		if clearErr := s.userQuery.ClearJwcBinding(ctx, uid); clearErr != nil {
+			log.Printf("[GetAllGrades] 清除绑定信息失败：uid=%d, err=%v", uid, clearErr)
+		}
+		return nil, nil, err
+	}
+
+	// 超时或网络错误，尝试从数据库获取
+	log.Printf("[GetAllGrades] 教务系统请求超时/网络错误，尝试从数据库获取：uid=%d, err=%v", uid, err)
 
 	dbGrades, dbGPA, dbErr := s.getGradesFromDatabase(ctx, uid)
 	if dbErr == nil && len(dbGrades) > 0 {
@@ -192,6 +241,41 @@ func (s *gradeService) GetAllGrades(ctx context.Context, uid int) ([]Grade, *GPA
 
 	// 数据库也没有数据，返回原始错误
 	return nil, nil, err
+}
+
+// isAuthenticationError 判断是否是认证相关错误（不应降级到数据库）
+func (s *gradeService) isAuthenticationError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// 检查是否是 AppError
+	if appErr, ok := err.(*common.AppError); ok {
+		switch appErr.Code {
+		case common.CodeJwcLoginFailed, // 登录失败
+			common.CodeJwcNotBound,  // 未绑定
+			common.CodeUnauthorized: // 未授权/密码错误
+			return true
+		}
+	}
+
+	// 检查错误信息是否包含登录相关关键字
+	errMsg := err.Error()
+	authKeywords := []string{
+		"登录失败",
+		"密码错误",
+		"账号被锁",
+		"未绑定",
+		"认证失败",
+		"用户名或密码",
+	}
+	for _, keyword := range authKeywords {
+		if strings.Contains(errMsg, keyword) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // fetchGradesFromJwc 从教务系统获取成绩
@@ -282,6 +366,28 @@ func (s *gradeService) triggerAsyncReconciliation(uid int) {
 		ctx := context.Background()
 		s.reconciliationTrigger.TriggerGradeSync(ctx, uid)
 	}()
+}
+
+// GetAllGradesForSync 获取所有成绩（供对账模块使用，不触发递归同步）
+// 直接从教务系统获取，不走超时降级逻辑，失败直接返回错误
+func (s *gradeService) GetAllGradesForSync(ctx context.Context, uid int) ([]Grade, *GPA, error) {
+	// 获取用户信息
+	user, err := s.userQuery.GetUserByUid(ctx, uid)
+	if err != nil {
+		return nil, nil, common.NewAppError(common.CodeUserNotFound, "用户不存在")
+	}
+
+	if user.Sid == "" || user.Spwd == "" {
+		return nil, nil, common.NewAppError(common.CodeJwcNotBound, "未绑定教务系统账号")
+	}
+
+	// 直接从教务系统获取成绩，不触发同步
+	grades, gpa, err := s.fetchGradesFromJwc(ctx, uid, user.Sid, user.Spwd)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return grades, gpa, nil
 }
 
 // GetGradesByTerm 根据学期获取成绩
@@ -483,6 +589,8 @@ func (s *gradeService) GetGradesByYear(ctx context.Context, uid int, year string
 }
 
 // GetLevelGrades 获取等级考试成绩
+// 策略：先尝试从教务系统获取（2秒超时），超时则返回数据库数据
+// 注意：登录失败等认证错误不降级，直接返回错误
 func (s *gradeService) GetLevelGrades(ctx context.Context, uid int) ([]LevelGrade, error) {
 	// 获取用户信息
 	user, err := s.userQuery.GetUserByUid(ctx, uid)
@@ -494,8 +602,60 @@ func (s *gradeService) GetLevelGrades(ctx context.Context, uid int) ([]LevelGrad
 		return nil, common.NewAppError(common.CodeJwcNotBound, "未绑定教务系统账号")
 	}
 
+	// 创建带 2 秒超时的上下文
+	timeoutCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	// 尝试从教务系统获取
+	levelGrades, err := s.fetchLevelGradesFromJwc(timeoutCtx, uid, user.Sid, user.Spwd)
+
+	if err == nil {
+		return levelGrades, nil
+	}
+
+	// 判断错误类型：登录失败/认证错误不降级，直接返回错误
+	if s.isAuthenticationError(err) {
+		log.Printf("[GetLevelGrades] 认证错误，清除绑定信息：uid=%d, err=%v", uid, err)
+		// 清除用户的教务系统绑定
+		if clearErr := s.userQuery.ClearJwcBinding(ctx, uid); clearErr != nil {
+			log.Printf("[GetLevelGrades] 清除绑定信息失败：uid=%d, err=%v", uid, clearErr)
+		}
+		return nil, err
+	}
+
+	// 超时或网络错误，尝试从数据库获取
+	log.Printf("[GetLevelGrades] 教务系统请求超时/网络错误，尝试从数据库获取：uid=%d, err=%v", uid, err)
+
+	dbLevelGrades, dbErr := s.getLevelGradesFromDatabase(ctx, uid)
+	if dbErr == nil && len(dbLevelGrades) > 0 {
+		return dbLevelGrades, nil
+	}
+
+	// 数据库也没有数据，返回原始错误
+	return nil, err
+}
+
+// GetLevelGradesForSync 获取等级考试成绩（供对账模块使用，不触发递归同步）
+// 直接从教务系统获取，不走超时降级逻辑，失败直接返回错误
+func (s *gradeService) GetLevelGradesForSync(ctx context.Context, uid int) ([]LevelGrade, error) {
+	// 获取用户信息
+	user, err := s.userQuery.GetUserByUid(ctx, uid)
+	if err != nil {
+		return nil, common.NewAppError(common.CodeUserNotFound, "用户不存在")
+	}
+
+	if user.Sid == "" || user.Spwd == "" {
+		return nil, common.NewAppError(common.CodeJwcNotBound, "未绑定教务系统账号")
+	}
+
+	// 直接从教务系统获取等级考试成绩，不触发同步
+	return s.fetchLevelGradesFromJwc(ctx, uid, user.Sid, user.Spwd)
+}
+
+// fetchLevelGradesFromJwc 从教务系统获取等级考试成绩
+func (s *gradeService) fetchLevelGradesFromJwc(ctx context.Context, uid int, sid, spwd string) ([]LevelGrade, error) {
 	// 获取会话
-	cookies, err := s.getCookiesOrLogin(ctx, uid, user.Sid, user.Spwd)
+	cookies, err := s.getCookiesOrLogin(ctx, uid, sid, spwd)
 	if err != nil {
 		return nil, err
 	}
@@ -509,6 +669,20 @@ func (s *gradeService) GetLevelGrades(ctx context.Context, uid int) ([]LevelGrad
 
 	// 解析成绩
 	return s.parseLevelGradesFromHTML(body)
+}
+
+// getLevelGradesFromDatabase 从数据库获取等级考试成绩
+func (s *gradeService) getLevelGradesFromDatabase(ctx context.Context, uid int) ([]LevelGrade, error) {
+	if s.gradeRepo == nil {
+		return nil, common.NewAppError(common.CodeInternalError, "成绩仓储未配置")
+	}
+
+	levelGrades, err := s.gradeRepo.GetLevelGradesByUid(ctx, uid)
+	if err != nil {
+		return nil, err
+	}
+
+	return levelGrades, nil
 }
 
 func (s *gradeService) GetRegularGrades(ctx context.Context, uid int, term string, courseId string) (*RegularGrade, error) {

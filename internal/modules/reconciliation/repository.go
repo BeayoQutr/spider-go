@@ -2,9 +2,11 @@ package reconciliation
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Repository 对账数据仓储接口
@@ -144,30 +146,15 @@ func (r *repository) BatchUpsertGrades(ctx context.Context, grades []*Grade) err
 		return nil
 	}
 
-	// 使用事务批量 upsert
-	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		for _, grade := range grades {
-			// 先查询是否存在
-			var existing Grade
-			err := tx.Where("uid = ? AND term = ? AND code = ?", grade.Uid, grade.Term, grade.Code).First(&existing).Error
-			if err == nil {
-				// 存在则更新
-				grade.ID = existing.ID
-				grade.CreatedAt = existing.CreatedAt
-				if err := tx.Save(grade).Error; err != nil {
-					return err
-				}
-			} else if err == gorm.ErrRecordNotFound {
-				// 不存在则创建
-				if err := tx.Create(grade).Error; err != nil {
-					return err
-				}
-			} else {
-				return err
-			}
-		}
-		return nil
-	})
+	// 使用 MySQL ON DUPLICATE KEY UPDATE 批量 upsert
+	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "uid"}, {Name: "term"}, {Name: "code"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"serial_no", "subject", "score", "credit", "gpa", "status",
+			"property", "flag", "sync_version", "last_sync_at", "last_sync_task_id",
+			"is_deleted", "updated_at",
+		}),
+	}).Create(grades).Error
 }
 
 func (r *repository) GetGradesByUid(ctx context.Context, uid int) ([]*Grade, error) {
@@ -336,17 +323,70 @@ func (r *repository) BatchUpsertCourses(ctx context.Context, courses []*Course) 
 		return nil
 	}
 
+	// 按 uid 分组处理（同一用户的课表一起处理）
+	uidCourses := make(map[int][]*Course)
+	for _, course := range courses {
+		uidCourses[course.Uid] = append(uidCourses[course.Uid], course)
+	}
+
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		for _, course := range courses {
-			if err := tx.Where("uid = ? AND term = ? AND week = ? AND name = ? AND weekday = ? AND start_period = ?",
-				course.Uid, course.Term, course.Week, course.Name, course.Weekday, course.StartPeriod).
-				Assign(course).
-				FirstOrCreate(course).Error; err != nil {
+		for uid, userCourses := range uidCourses {
+			if len(userCourses) == 0 {
+				continue
+			}
+
+			// 获取该用户该学期的所有现有课表
+			term := userCourses[0].Term
+			var existingCourses []*Course
+			if err := tx.Where("uid = ? AND term = ?", uid, term).Find(&existingCourses).Error; err != nil {
 				return err
+			}
+
+			// 建立已存在课表的映射 (key: uid-term-week-name-weekday-startPeriod)
+			existingMap := make(map[string]*Course)
+			for _, c := range existingCourses {
+				key := r.courseKey(c)
+				existingMap[key] = c
+			}
+
+			// 分离需要插入和更新的记录
+			var toInsert []*Course
+			var toUpdate []*Course
+
+			for _, course := range userCourses {
+				key := r.courseKey(course)
+				if existing, ok := existingMap[key]; ok {
+					// 已存在，需要更新，保留原有的 ID 和 CreatedAt
+					course.ID = existing.ID
+					course.CreatedAt = existing.CreatedAt
+					toUpdate = append(toUpdate, course)
+				} else {
+					// 不存在，需要插入
+					toInsert = append(toInsert, course)
+				}
+			}
+
+			// 批量插入新记录
+			if len(toInsert) > 0 {
+				if err := tx.CreateInBatches(toInsert, 100).Error; err != nil {
+					return err
+				}
+			}
+
+			// 批量更新已有记录
+			for _, course := range toUpdate {
+				if err := tx.Save(course).Error; err != nil {
+					return err
+				}
 			}
 		}
 		return nil
 	})
+}
+
+// courseKey 生成课表唯一标识
+func (r *repository) courseKey(c *Course) string {
+	return fmt.Sprintf("%d-%s-%d-%s-%d-%d", c.Uid, c.Term, c.Week, c.Name, c.Weekday, c.StartPeriod)
 }
 
 func (r *repository) GetCoursesByUid(ctx context.Context, uid int, term string, week int) ([]*Course, error) {

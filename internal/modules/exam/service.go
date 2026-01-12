@@ -3,6 +3,7 @@ package exam
 import (
 	"context"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -16,18 +17,36 @@ import (
 	"github.com/PuerkitoBio/goquery"
 )
 
+// ExamRepository 考试数据访问接口（用于离线查询）
+type ExamRepository interface {
+	GetExamsByUidAndTerm(ctx context.Context, uid int, term string) ([]ExamArrangement, error)
+}
+
+// ReconciliationTrigger 对账触发器接口（避免循环依赖）
+type ReconciliationTrigger interface {
+	TriggerExamSync(ctx context.Context, uid int)
+}
+
 // Service 考试服务接口
 type Service interface {
 	GetAllExams(ctx context.Context, uid int, term string) ([]ExamArrangement, error)
+	// GetAllExamsForSync 获取考试安排（供对账模块使用，不触发递归同步）
+	GetAllExamsForSync(ctx context.Context, uid int, term string) ([]ExamArrangement, error)
+	// SetExamRepository 设置考试仓储（用于延迟注入）
+	SetExamRepository(repo ExamRepository)
+	// SetReconciliationTrigger 设置对账触发器（用于延迟注入）
+	SetReconciliationTrigger(trigger ReconciliationTrigger)
 }
 
 // examService 考试服务实现
 type examService struct {
-	userQuery      shared.UserQuery
-	sessionService service.SessionService
-	crawlerService service.CrawlerService
-	userDataCache  cache.UserDataCache
-	examURL        string
+	userQuery             shared.UserQuery
+	sessionService        service.SessionService
+	crawlerService        service.CrawlerService
+	userDataCache         cache.UserDataCache
+	examRepo              ExamRepository
+	reconciliationTrigger ReconciliationTrigger
+	examURL               string
 }
 
 // NewService 创建考试服务
@@ -47,7 +66,19 @@ func NewService(
 	}
 }
 
+// SetExamRepository 设置考试仓储（用于延迟注入）
+func (s *examService) SetExamRepository(repo ExamRepository) {
+	s.examRepo = repo
+}
+
+// SetReconciliationTrigger 设置对账触发器
+func (s *examService) SetReconciliationTrigger(trigger ReconciliationTrigger) {
+	s.reconciliationTrigger = trigger
+}
+
 // GetAllExams 获取考试安排
+// 策略：先尝试从教务系统获取（2秒超时），超时则返回数据库数据
+// 注意：登录失败等认证错误不降级，直接返回错误
 func (s *examService) GetAllExams(ctx context.Context, uid int, term string) ([]ExamArrangement, error) {
 	// 校验参数
 	re := regexp.MustCompile(`^\d{4}-\d{4}-[12]$`)
@@ -71,8 +102,67 @@ func (s *examService) GetAllExams(ctx context.Context, uid int, term string) ([]
 		return cachedExams, nil
 	}
 
+	// 创建带 2 秒超时的上下文
+	timeoutCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	// 尝试从教务系统获取
+	exams, err := s.fetchExamsFromJwc(timeoutCtx, uid, user.Sid, user.Spwd, term)
+
+	if err == nil {
+		// 成功从教务系统获取，异步触发对账更新
+		s.triggerAsyncReconciliation(uid)
+		return exams, nil
+	}
+
+	// 判断错误类型：登录失败/认证错误不降级，直接返回错误
+	if s.isAuthenticationError(err) {
+		log.Printf("[GetAllExams] 认证错误，清除绑定信息：uid=%d, err=%v", uid, err)
+		// 清除用户的教务系统绑定
+		if clearErr := s.userQuery.ClearJwcBinding(ctx, uid); clearErr != nil {
+			log.Printf("[GetAllExams] 清除绑定信息失败：uid=%d, err=%v", uid, clearErr)
+		}
+		return nil, err
+	}
+
+	// 超时或网络错误，尝试从数据库获取
+	log.Printf("[GetAllExams] 教务系统请求超时/网络错误，尝试从数据库获取：uid=%d, err=%v", uid, err)
+
+	dbExams, dbErr := s.getExamsFromDatabase(ctx, uid, term)
+	if dbErr == nil && len(dbExams) > 0 {
+		return dbExams, nil
+	}
+
+	// 数据库也没有数据，返回原始错误
+	return nil, err
+}
+
+// GetAllExamsForSync 获取考试安排（供对账模块使用，不触发递归同步）
+func (s *examService) GetAllExamsForSync(ctx context.Context, uid int, term string) ([]ExamArrangement, error) {
+	// 校验参数
+	re := regexp.MustCompile(`^\d{4}-\d{4}-[12]$`)
+	if !re.MatchString(term) {
+		return nil, common.NewAppError(common.CodeJwcInvalidParams, "学期格式错误")
+	}
+
+	// 获取用户信息
+	user, err := s.userQuery.GetUserByUid(ctx, uid)
+	if err != nil {
+		return nil, common.NewAppError(common.CodeUserNotFound, "用户不存在")
+	}
+
+	if user.Sid == "" || user.Spwd == "" {
+		return nil, common.NewAppError(common.CodeJwcNotBound, "未绑定教务系统账号")
+	}
+
+	// 直接从教务系统获取，不触发同步
+	return s.fetchExamsFromJwc(ctx, uid, user.Sid, user.Spwd, term)
+}
+
+// fetchExamsFromJwc 从教务系统获取考试安排
+func (s *examService) fetchExamsFromJwc(ctx context.Context, uid int, sid, spwd, term string) ([]ExamArrangement, error) {
 	// 获取会话
-	cookies, err := s.getCookiesOrLogin(ctx, uid, user.Sid, user.Spwd)
+	cookies, err := s.getCookiesOrLogin(ctx, uid, sid, spwd)
 	if err != nil {
 		return nil, err
 	}
@@ -98,6 +188,65 @@ func (s *examService) GetAllExams(ctx context.Context, uid int, term string) ([]
 	_ = s.userDataCache.CacheExams(ctx, uid, term, exams, time.Hour)
 
 	return exams, nil
+}
+
+// getExamsFromDatabase 从数据库获取考试安排
+func (s *examService) getExamsFromDatabase(ctx context.Context, uid int, term string) ([]ExamArrangement, error) {
+	if s.examRepo == nil {
+		return nil, common.NewAppError(common.CodeInternalError, "考试仓储未配置")
+	}
+
+	exams, err := s.examRepo.GetExamsByUidAndTerm(ctx, uid, term)
+	if err != nil {
+		return nil, err
+	}
+
+	return exams, nil
+}
+
+// isAuthenticationError 判断是否是认证相关错误
+func (s *examService) isAuthenticationError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if appErr, ok := err.(*common.AppError); ok {
+		switch appErr.Code {
+		case common.CodeJwcLoginFailed,
+			common.CodeJwcNotBound,
+			common.CodeUnauthorized:
+			return true
+		}
+	}
+
+	errMsg := err.Error()
+	authKeywords := []string{
+		"登录失败",
+		"密码错误",
+		"账号被锁",
+		"未绑定",
+		"认证失败",
+		"用户名或密码",
+	}
+	for _, keyword := range authKeywords {
+		if strings.Contains(errMsg, keyword) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// triggerAsyncReconciliation 异步触发对账更新
+func (s *examService) triggerAsyncReconciliation(uid int) {
+	if s.reconciliationTrigger == nil {
+		return
+	}
+
+	go func() {
+		ctx := context.Background()
+		s.reconciliationTrigger.TriggerExamSync(ctx, uid)
+	}()
 }
 
 // getCookiesOrLogin 获取缓存的 cookies 或登录
