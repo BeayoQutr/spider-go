@@ -13,13 +13,14 @@ type Service interface {
 	// 批量更新学生GPA
 	BatchUpdateGPAs(ctx context.Context, dataList []*StudentGPAData, statisticsType, statisticsTerm string) error
 
-	// 查询排名（实时计算）
-	GetStudentRanking(ctx context.Context, uid int, statisticsType, statisticsTerm string) (*RankingResponse, error)
-	GetRankingList(ctx context.Context, req *RankingListRequest) (*RankingListResponse, error)
+	// 获取我的排名
+	GetMyRanking(ctx context.Context, uid int, statisticsType, statisticsTerm string) (*MyRankingResponse, error)
 
-	// 统计
+	// 查询排名（实时计算）- 保留用于内部调用
+	GetStudentRanking(ctx context.Context, uid int, statisticsType, statisticsTerm string) (*RankingResponse, error)
+
+	// 统计 - 保留用于内部调用
 	GetCollegeStats(ctx context.Context, college, statisticsType, statisticsTerm string) (*CollegeRankingStats, error)
-	GetAllColleges(ctx context.Context) ([]string, error)
 }
 
 // service 实现
@@ -88,7 +89,32 @@ func (s *service) BatchUpdateGPAs(ctx context.Context, dataList []*StudentGPADat
 	return s.repo.BatchUpsertGPAs(ctx, gpas)
 }
 
-// GetStudentRanking 获取学生排名信息（实时计算）
+// GetMyRanking 获取我的排名（只显示自己的排名，不显示他人信息）
+func (s *service) GetMyRanking(ctx context.Context, uid int, statisticsType, statisticsTerm string) (*MyRankingResponse, error) {
+	// 获取学生排名数据（排名实时计算）
+	ranking, err := s.repo.GetRankingByUid(ctx, uid, statisticsType, statisticsTerm)
+	if err != nil {
+		return nil, err
+	}
+
+	return &MyRankingResponse{
+		Name:           ranking.Name,
+		College:        ranking.College,
+		Major:          ranking.Major,
+		Grade:          ranking.Grade,
+		Class:          ranking.Class,
+		GPA:            ranking.GPA,
+		AvgScore:       ranking.AvgScore,
+		CollegeRank:    ranking.CollegeRank,
+		CollegeTotal:   ranking.CollegeTotal,
+		MajorRank:      ranking.MajorRank,
+		MajorTotal:     ranking.MajorTotal,
+		StatisticsType: statisticsType,
+		StatisticsTerm: statisticsTerm,
+	}, nil
+}
+
+// GetStudentRanking 获取学生排名信息（实时计算）- 保留用于内部调用
 func (s *service) GetStudentRanking(ctx context.Context, uid int, statisticsType, statisticsTerm string) (*RankingResponse, error) {
 	// 获取学生排名数据（排名实时计算）
 	ranking, err := s.repo.GetRankingByUid(ctx, uid, statisticsType, statisticsTerm)
@@ -115,29 +141,9 @@ func (s *service) GetStudentRanking(ctx context.Context, uid int, statisticsType
 	}, nil
 }
 
-// GetRankingList 获取排名列表
-func (s *service) GetRankingList(ctx context.Context, req *RankingListRequest) (*RankingListResponse, error) {
-	list, total, err := s.repo.GetRankingList(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-
-	return &RankingListResponse{
-		Total:    total,
-		Page:     req.Page,
-		PageSize: req.PageSize,
-		List:     list,
-	}, nil
-}
-
 // GetCollegeStats 获取学院统计
 func (s *service) GetCollegeStats(ctx context.Context, college, statisticsType, statisticsTerm string) (*CollegeRankingStats, error) {
 	return s.repo.GetCollegeStats(ctx, college, statisticsType, statisticsTerm)
-}
-
-// GetAllColleges 获取所有学院列表
-func (s *service) GetAllColleges(ctx context.Context) ([]string, error) {
-	return s.repo.GetAllColleges(ctx)
 }
 
 // UpdateStudentRanking 兼容旧接口（内部调用 UpdateStudentGPA）

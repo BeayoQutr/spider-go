@@ -60,59 +60,63 @@ func (r *repository) BatchUpsertGPAs(ctx context.Context, gpas []*StudentGPA) er
 	})
 }
 
-// GetRankingByUid 根据uid获取排名数据（实时计算排名）
+// GetRankingByUid 根据uid获取排名数据（实时计算排名，只与同年级比较，按学号去重）
 func (r *repository) GetRankingByUid(ctx context.Context, uid int, statisticsType, statisticsTerm string) (*StudentRankingView, error) {
 	var result StudentRankingView
 
-	// 使用窗口函数实时计算排名
+	// 使用子查询实时计算排名（只与同年级的人比较，按学号去重）
 	sql := `
 		SELECT
 			g.*,
-			-- 学院排名
-			(SELECT COUNT(*) + 1 FROM student_gpas g2
-			 WHERE g2.college = g.college
+			-- 学院排名（同年级，按学号去重）
+			(SELECT COUNT(DISTINCT g2.sid) + 1 FROM student_gpas g2
+			 WHERE g2.college = g.college AND g2.grade = g.grade
 			   AND g2.statistics_type = g.statistics_type
 			   AND g2.statistics_term = g.statistics_term
+			   AND g2.sid != g.sid
 			   AND (g2.gpa > g.gpa OR (g2.gpa = g.gpa AND g2.avg_score > g.avg_score))
 			) as college_rank,
-			-- 专业排名
-			(SELECT COUNT(*) + 1 FROM student_gpas g2
-			 WHERE g2.college = g.college AND g2.major = g.major
-			   AND g2.statistics_type = g.statistics_type
-			   AND g2.statistics_term = g.statistics_term
-			   AND (g2.gpa > g.gpa OR (g2.gpa = g.gpa AND g2.avg_score > g.avg_score))
-			) as major_rank,
-			-- 年级排名
-			(SELECT COUNT(*) + 1 FROM student_gpas g2
+			-- 专业排名（同年级，按学号去重）
+			(SELECT COUNT(DISTINCT g2.sid) + 1 FROM student_gpas g2
 			 WHERE g2.college = g.college AND g2.major = g.major AND g2.grade = g.grade
 			   AND g2.statistics_type = g.statistics_type
 			   AND g2.statistics_term = g.statistics_term
+			   AND g2.sid != g.sid
+			   AND (g2.gpa > g.gpa OR (g2.gpa = g.gpa AND g2.avg_score > g.avg_score))
+			) as major_rank,
+			-- 年级排名（与专业排名相同，因为已经是同年级同专业，按学号去重）
+			(SELECT COUNT(DISTINCT g2.sid) + 1 FROM student_gpas g2
+			 WHERE g2.college = g.college AND g2.major = g.major AND g2.grade = g.grade
+			   AND g2.statistics_type = g.statistics_type
+			   AND g2.statistics_term = g.statistics_term
+			   AND g2.sid != g.sid
 			   AND (g2.gpa > g.gpa OR (g2.gpa = g.gpa AND g2.avg_score > g.avg_score))
 			) as grade_rank,
-			-- 班级排名
-			(SELECT COUNT(*) + 1 FROM student_gpas g2
+			-- 班级排名（按学号去重）
+			(SELECT COUNT(DISTINCT g2.sid) + 1 FROM student_gpas g2
 			 WHERE g2.college = g.college AND g2.major = g.major AND g2.grade = g.grade AND g2.class = g.class
 			   AND g2.statistics_type = g.statistics_type
 			   AND g2.statistics_term = g.statistics_term
+			   AND g2.sid != g.sid
 			   AND (g2.gpa > g.gpa OR (g2.gpa = g.gpa AND g2.avg_score > g.avg_score))
 			) as class_rank,
-			-- 总人数
-			(SELECT COUNT(*) FROM student_gpas g2
-			 WHERE g2.college = g.college
+			-- 总人数（同年级，按学号去重）
+			(SELECT COUNT(DISTINCT g2.sid) FROM student_gpas g2
+			 WHERE g2.college = g.college AND g2.grade = g.grade
 			   AND g2.statistics_type = g.statistics_type
 			   AND g2.statistics_term = g.statistics_term
 			) as college_total,
-			(SELECT COUNT(*) FROM student_gpas g2
-			 WHERE g2.college = g.college AND g2.major = g.major
+			(SELECT COUNT(DISTINCT g2.sid) FROM student_gpas g2
+			 WHERE g2.college = g.college AND g2.major = g.major AND g2.grade = g.grade
 			   AND g2.statistics_type = g.statistics_type
 			   AND g2.statistics_term = g.statistics_term
 			) as major_total,
-			(SELECT COUNT(*) FROM student_gpas g2
+			(SELECT COUNT(DISTINCT g2.sid) FROM student_gpas g2
 			 WHERE g2.college = g.college AND g2.major = g.major AND g2.grade = g.grade
 			   AND g2.statistics_type = g.statistics_type
 			   AND g2.statistics_term = g.statistics_term
 			) as grade_total,
-			(SELECT COUNT(*) FROM student_gpas g2
+			(SELECT COUNT(DISTINCT g2.sid) FROM student_gpas g2
 			 WHERE g2.college = g.college AND g2.major = g.major AND g2.grade = g.grade AND g2.class = g.class
 			   AND g2.statistics_type = g.statistics_type
 			   AND g2.statistics_term = g.statistics_term

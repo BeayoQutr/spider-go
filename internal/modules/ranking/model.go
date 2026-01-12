@@ -66,11 +66,35 @@ type MajorRankingStats struct {
 
 // GetRankingRequest 获取排名请求
 type GetRankingRequest struct {
-	StatisticsType string `form:"statistics_type"` // cumulative(累计) 或 semester(学期)
-	StatisticsTerm string `form:"statistics_term"` // 学期（学期统计时必填）
+	StatisticsType string `form:"statistics_type"` // cumulative(累计) 或 semester(学期) 或 year(学年)
+	StatisticsTerm string `form:"statistics_term"` // 学期/学年（如 2024-2025-1 或 2024-2025）
 }
 
-// RankingResponse 排名响应
+// MyRankingResponse 我的排名响应（只显示自己的排名，不显示他人信息）
+type MyRankingResponse struct {
+	// 基本信息
+	Name    string `json:"name"`    // 姓名
+	College string `json:"college"` // 学院
+	Major   string `json:"major"`   // 专业
+	Grade   string `json:"grade"`   // 年级
+	Class   string `json:"class"`   // 班级
+
+	// GPA信息
+	GPA      float64 `json:"gpa"`       // 平均绩点
+	AvgScore float64 `json:"avg_score"` // 平均分
+
+	// 排名信息（只显示排名，不显示他人）
+	CollegeRank  int `json:"college_rank"`  // 学院排名
+	CollegeTotal int `json:"college_total"` // 学院总人数
+	MajorRank    int `json:"major_rank"`    // 专业排名
+	MajorTotal   int `json:"major_total"`   // 专业总人数
+
+	// 统计信息
+	StatisticsType string `json:"statistics_type"` // 统计类型
+	StatisticsTerm string `json:"statistics_term"` // 统计学期/学年
+}
+
+// RankingResponse 排名响应（保留兼容，但简化内容）
 type RankingResponse struct {
 	Student      *StudentRankingView  `json:"student"`
 	CollegeStats *CollegeRankingStats `json:"college_stats"`
