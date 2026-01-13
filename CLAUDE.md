@@ -10,8 +10,12 @@ Spider-Go is a Go-based educational administration system crawler and management
 
 ### Running the Application
 ```bash
-# Run directly
+# Run directly (defaults to dev environment)
 go run main.go
+
+# Run with explicit environment
+go run main.go -env=dev
+go run main.go -env=production
 
 # Build and run
 go build -o spider-go
@@ -19,7 +23,14 @@ go build -o spider-go
 
 # Build for Windows
 go build -o spider-go.exe
+
+# Build optimized production binary
+go build -ldflags="-s -w" -o spider-go-production.exe
 ```
+
+**Environment Configuration**: The app uses `GO_ENV` environment variable or `-env` flag. Config files are loaded from:
+- `config/config.dev.yaml` (development)
+- `config/config.production.yaml` (production)
 
 ### Dependencies
 ```bash
@@ -35,44 +46,40 @@ The application uses GORM with auto-migration. Database tables are created autom
 
 ## Architecture
 
-⚠️ **IMPORTANT: This project is undergoing a major refactoring** from Java-style (layered) to Go-style (domain-driven) architecture. See `REFACTORING_GUIDE.md` for details.
+### Current Architecture
 
-### Current Architecture (Hybrid)
+The project follows a **domain-driven module architecture**:
 
-The project currently supports **both old and new structures**:
-
-#### 🆕 New Structure (Recommended for new features)
 ```
 internal/
 ├── modules/              # Domain-driven modules
-│   ├── grade/            # Grade module ✅
-│   │   ├── model.go
-│   │   ├── service.go
-│   │   ├── handler.go
-│   │   └── module.go
-│   ├── evaluation/       # Evaluation module ✅
-│   ├── user/             # User module ✅
-│   └── [others]/         # To be migrated
-├── app/                  # App initialization
-├── middleware/           # Middleware
-└── shared/               # Shared utilities
+│   ├── admin/            # Admin management
+│   ├── config/           # System configuration
+│   ├── course/           # Course schedules
+│   ├── evaluation/       # Course evaluations
+│   ├── exam/             # Exam schedules
+│   ├── grade/            # Grade queries
+│   ├── notice/           # System notices
+│   ├── ranking/          # Grade rankings
+│   ├── reconciliation/   # Data synchronization
+│   ├── statistics/       # Statistics queries
+│   └── user/             # User authentication
+├── app/                  # App initialization and DI container
+├── cache/                # Redis cache implementations
+├── middleware/           # HTTP middlewares (auth, CORS)
+├── scheduler/            # Cron job scheduler
+├── service/              # Infrastructure services (session, crawler, email)
+├── shared/               # Shared utilities across modules
+└── utils/                # General utilities
 
 pkg/                      # Reusable libraries
-├── httpclient/
-├── cache/
-├── crypto/
-└── logger/
+├── email/                # Email client
+├── errors/               # Error handling
+├── httpclient/           # HTTP client wrapper
+└── redis/                # Redis client
 ```
 
-#### 🔄 Old Structure (Being phased out)
-```
-internal/
-├── controller/  # HTTP handlers (old)
-├── service/     # Business logic (old)
-├── repository/  # Data access (old)
-├── dto/         # DTOs (old)
-└── common/      # Common utilities (migrating to shared/)
-```
+**Note**: Some legacy service layer code still exists in `internal/service/` but only for infrastructure concerns (SessionService, CrawlerService, EmailService). Domain logic lives in modules.
 
 ### Dependency Injection Container
 
@@ -84,10 +91,10 @@ The entire application is built around a centralized dependency injection contai
    - Default admin created if not exists
 
 2. **Adding new components**:
-   - **For new modules**: Create in `internal/modules/yourmodule/` (see `REFACTORING_GUIDE.md`)
-   - **For old-style**: Follow existing pattern in container (not recommended)
+   - **For new modules**: Create in `internal/modules/yourmodule/` following the module pattern below
+   - Always add module initialization to `container.initModules()`
 
-### New Module Architecture (Recommended)
+### Module Architecture
 
 Each module in `internal/modules/` follows this structure:
 
@@ -100,20 +107,23 @@ yourmodule/
 └── module.go      # Module assembly and DI
 ```
 
-**Benefits:**
-- High cohesion: all related code in one place
-- Clear boundaries: easy to understand what belongs where
-- Easy maintenance: modify a feature in one location
-- Independent testing: each module can be tested in isolation
+**Module pattern**:
+- `module.go` creates the module and wires dependencies
+- Module exposes `RegisterRoutes()` to register HTTP routes
+- Module exposes `GetService()` for cross-module dependencies
+- See `internal/modules/grade/` or `internal/modules/user/` for reference
 
 ### Configuration System
 
-Configuration uses Viper with YAML (`config/config.yaml`). Two modes for educational system access:
+Configuration uses Viper with YAML. Two environments supported:
+- **Development**: `config/config.dev.yaml` (loaded when `GO_ENV=dev` or `-env=dev`)
+- **Production**: `config/config.production.yaml` (loaded when `GO_ENV=production` or `-env=production`)
 
+**Educational System Access Modes**:
 - **campus**: For on-campus network (direct URLs to jwgl.csuft.edu.cn)
 - **webvpn**: For off-campus access (WebVPN URLs)
 
-Switch modes by setting `jwc.mode` in config. The container automatically injects the correct URLs into services.
+Switch modes by setting `jwc.mode` in config files. The container automatically injects the correct URLs into modules at startup.
 
 ### Session Management
 
@@ -147,9 +157,16 @@ Educational system sessions are cached in Redis (DB 0) with 1-hour expiration:
 
 ### Scheduled Tasks
 
-Defined in `internal/app/scheduler.go` using cron:
-- **Daily 2 AM**: Data prewarming (pre-caches user data)
-- **Every hour**: RSA public key refresh from CAS server
+The application uses `github.com/robfig/cron/v3` for scheduled tasks. Task definitions are in `internal/scheduler/tasks/`:
+
+**Current scheduled tasks** (configured in `main.go`):
+- **RSA public key refresh**: Every hour (`0 * * * *`) - Fetches latest RSA public key from CAS server
+- **Reset bind count**: Monthly on 1st at midnight (`0 0 1 * *`) - Resets user educational system binding limits
+- **User data sync**: Daily at 2 AM (`0 2 * * *`) - Pre-caches user grades/courses/exams
+
+**Adding a new scheduled task**:
+1. Create task in `internal/scheduler/tasks/your_task.go` implementing the `Task` interface
+2. Add task to scheduler in `main.go` `initScheduler()` function
 
 ### Error Handling
 
@@ -202,61 +219,92 @@ func (s *gradeService) GetAllGrades(ctx context.Context, uid int) ([]Grade, erro
 
 ## Common Tasks
 
-### Adding a New Module (Recommended for new features)
-
-**Follow the Go-style module pattern:**
+### Adding a New Module
 
 1. **Create module directory**: `internal/modules/yourmodule/`
 2. **Create files**:
    - `model.go` - Data models and DTOs
    - `service.go` - Business logic interface and implementation
    - `handler.go` - HTTP handlers
-   - `module.go` - Module assembly
-3. **Implement service**:
+   - `module.go` - Module assembly and DI wiring
+   - `repository.go` - Database operations (optional, if needed)
+3. **Implement the module**:
    ```go
-   type Service interface {
-       YourMethod(ctx context.Context, ...) (result, error)
+   // module.go
+   type Module struct {
+       handler *Handler
+       service Service
+   }
+
+   func NewModule(deps...) *Module {
+       svc := NewService(deps...)
+       handler := NewHandler(svc)
+       return &Module{handler: handler, service: svc}
+   }
+
+   func (m *Module) RegisterRoutes(r *gin.RouterGroup) {
+       m.handler.RegisterRoutes(r)
+   }
+
+   func (m *Module) GetService() Service {
+       return m.service
    }
    ```
-4. **Register in container**: Add module initialization in `internal/app/container.go`
-5. **Register routes**: Add `module.RegisterRoutes(r)` in routing setup
+4. **Register in container**: Add to `internal/app/container.go`:
+   - Add module field to `Container` struct
+   - Initialize in `initModules()` method
+5. **Register routes**: Add `container.YourModule.RegisterRoutes(...)` in `internal/api/routes.go`
 
-**See `REFACTORING_GUIDE.md` for detailed steps and examples.**
+### Adding a Scheduled Task
 
-### Adding a New API Endpoint (Old style - not recommended)
+1. Create task file `internal/scheduler/tasks/your_task.go`:
+   ```go
+   type YourTask struct {
+       // dependencies
+   }
 
-1. **Define DTO** in `internal/dto/xxx_request.go`
-2. **Add service method** in `internal/service/xxx_service.go`
-3. **Add controller method** in `internal/controller/xxx_controller.go`
-4. **Register route** in `internal/api/routes.go`
-5. **Update container** if new service is needed
-
-⚠️ **For new features, use the module-based approach instead.**
+   func (t *YourTask) Name() string { return "Task Name" }
+   func (t *YourTask) Cron() string { return "0 2 * * *" } // cron expression
+   func (t *YourTask) Run(ctx context.Context) error {
+       // task logic
+   }
+   ```
+2. Add to scheduler in `main.go` `initScheduler()`:
+   ```go
+   s.AddTask(tasks.NewYourTask(dependencies...))
+   ```
 
 ### Adding Redis Cache
 
-1. Define interface in `internal/cache/xxx_cache.go`
-2. Implement with Redis client
-3. Add to container initialization
-4. Inject into service that needs it
+1. Define cache interface in `internal/cache/xxx_cache.go`:
+   ```go
+   type YourCache interface {
+       Get(ctx context.Context, key string) (value, error)
+       Set(ctx context.Context, key string, value, ttl time.Duration) error
+   }
+   ```
+2. Implement with Redis client (use `*redis.Client` from container)
+3. Add cache field to `Container` struct in `internal/app/container.go`
+4. Initialize in `container.initCaches()` method
+5. Inject cache into modules that need it
 
 ### Changing Educational System Mode
 
-Edit `config/config.yaml`:
+Edit `config/config.dev.yaml` or `config/config.production.yaml`:
 ```yaml
 jwc:
   mode: "webvpn"  # or "campus"
 ```
-Restart application. No code changes needed.
+Restart application. No code changes needed - URLs are injected automatically.
 
 ## Important Notes
 
 - **No tests exist yet** - the project currently lacks unit and integration tests
-- **No Makefile** - use `go run`/`go build` directly
 - **Auto-migration only** - GORM creates tables on startup, no manual migrations
-- **Default admin**: `admin@spider-go.com` / `123456` (change immediately in production)
-- **CORS**: Configured in `config.yaml` under `cors` section
-- **Graceful shutdown**: Implemented in `main.go` with signal handling
+- **Default admin**: Created on first startup with email `admin@spider-go.com` / password `123456` (change immediately in production)
+- **CORS**: Configured per environment in config files under `cors` section
+- **Graceful shutdown**: SIGINT/SIGTERM signals trigger cleanup of DB and Redis connections
+- **Module cross-dependencies**: Some modules depend on each other (e.g., grade → reconciliation). These are set up via delayed injection in `container.initModules()` to avoid circular dependencies.
 
 ## Database Schema
 
@@ -267,11 +315,11 @@ Tables auto-created by GORM:
 
 ## Configuration Checklist for Deployment
 
-Before deploying, update `config/config.yaml`:
-1. Change JWT secret to a strong random value
-2. Update database credentials
-3. Update Redis credentials
-4. Configure email SMTP settings (for verification codes)
-5. Set correct CORS allowed origins
-6. Choose appropriate `jwc.mode` (campus vs webvpn)
-7. Change default admin password after first login
+Before deploying, update `config/config.production.yaml`:
+1. Change `jwt.secret` to a strong random value
+2. Update `database` credentials and connection info
+3. Update `redis.session` and `redis.captcha` credentials
+4. Configure `email` SMTP settings for verification codes
+5. Set correct `cors.allow_origins` for your frontend domain(s)
+6. Choose appropriate `jwc.mode` (campus vs webvpn) based on network
+7. Change default admin password after first login via admin API

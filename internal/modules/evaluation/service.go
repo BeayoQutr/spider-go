@@ -18,6 +18,15 @@ import (
 type Service interface {
 	GetEvaluationInfo(ctx context.Context, uid int) (*[]EvaluationInfo, error)
 	LoginAndCacheEvaluation(ctx context.Context, uid int, sid, spwd string) error
+	// 新增接口
+	GetEvaluationTasks(ctx context.Context, uid int) (*[]EvaluationTask, error)
+	GetEvaluationCourses(ctx context.Context, uid int, taskId int) (*[]EvaluationCourse, error)
+	GetEvaluationQuestions(ctx context.Context, uid int, indexId, pjCourseType string) (*[]EvaluationQuestion, error)
+	SubmitEvaluation(ctx context.Context, uid int, submitData []EvaluationSubmitRequest) error
+	// 自动评教接口
+	AutoEvaluation(ctx context.Context, uid int) (*AutoEvaluationResult, error)
+	// 查看评教状态
+	GetEvaluationStatus(ctx context.Context, uid int) (*EvaluationStatus, error)
 }
 
 type evaluationService struct {
@@ -281,4 +290,414 @@ func (s *evaluationService) fetchWithAccessToken(ctx context.Context, method, ta
 	}
 
 	return resp.Body, nil
+}
+
+// ============ 新增方法实现 ============
+
+// GetEvaluationTasks 获取教评任务列表
+func (s *evaluationService) GetEvaluationTasks(ctx context.Context, uid int) (*[]EvaluationTask, error) {
+	user, err := s.userQuery.GetUserByUid(ctx, uid)
+	if err != nil {
+		return nil, common.NewAppError(common.CodeInternalError, "查询数据库错误")
+	}
+
+	accessToken, err := s.getAccessTokenOrLogin(ctx, uid, user.Sid, user.Spwd)
+	if err != nil {
+		return nil, err
+	}
+
+	// 请求教评任务列表
+	taskURL := "https://jxzlpt.csuft.edu.cn/api/xspj/xspj/getXspjtask"
+	body, err := s.fetchWithAccessToken(ctx, "POST", taskURL, accessToken, nil)
+	if err != nil {
+		return nil, common.NewAppError(common.CodeJwcRequestFailed, "获取教评任务失败")
+	}
+	defer body.Close()
+
+	bodyBytes, err := io.ReadAll(body)
+	if err != nil {
+		return nil, common.NewAppError(common.CodeJwcParseFailed, "读取响应失败")
+	}
+
+	var taskResp EvaluationTaskResponse
+	if err := json.Unmarshal(bodyBytes, &taskResp); err != nil {
+		return nil, common.NewAppError(common.CodeJwcParseFailed, "解析教评任务响应失败")
+	}
+
+	if taskResp.Code != 200 {
+		return nil, common.NewAppError(common.CodeJwcRequestFailed, fmt.Sprintf("教评系统返回错误: %s", taskResp.Message))
+	}
+
+	return &taskResp.Data.PageData, nil
+}
+
+// GetEvaluationCourses 查询评教课程列表
+func (s *evaluationService) GetEvaluationCourses(ctx context.Context, uid int, taskId int) (*[]EvaluationCourse, error) {
+	user, err := s.userQuery.GetUserByUid(ctx, uid)
+	if err != nil {
+		return nil, common.NewAppError(common.CodeInternalError, "查询数据库错误")
+	}
+
+	accessToken, err := s.getAccessTokenOrLogin(ctx, uid, user.Sid, user.Spwd)
+	if err != nil {
+		return nil, err
+	}
+
+	// 请求评教课程列表
+	courseURL := fmt.Sprintf("https://jxzlpt.csuft.edu.cn/api/xspj/xspj/getXspjStudentCourses?taskid=%d", taskId)
+	body, err := s.fetchWithAccessToken(ctx, "POST", courseURL, accessToken, nil)
+	if err != nil {
+		return nil, common.NewAppError(common.CodeJwcRequestFailed, "获取评教课程失败")
+	}
+	defer body.Close()
+
+	bodyBytes, err := io.ReadAll(body)
+	if err != nil {
+		return nil, common.NewAppError(common.CodeJwcParseFailed, "读取响应失败")
+	}
+
+	var courseResp EvaluationCoursesResponse
+	if err := json.Unmarshal(bodyBytes, &courseResp); err != nil {
+		return nil, common.NewAppError(common.CodeJwcParseFailed, "解析评教课程响应失败")
+	}
+
+	if courseResp.Code != 200 {
+		return nil, common.NewAppError(common.CodeJwcRequestFailed, fmt.Sprintf("教评系统返回错误: %s", courseResp.Message))
+	}
+
+	return &courseResp.Data.PageData, nil
+}
+
+// GetEvaluationQuestions 获取评教题目
+func (s *evaluationService) GetEvaluationQuestions(ctx context.Context, uid int, indexId, pjCourseType string) (*[]EvaluationQuestion, error) {
+	user, err := s.userQuery.GetUserByUid(ctx, uid)
+	if err != nil {
+		return nil, common.NewAppError(common.CodeInternalError, "查询数据库错误")
+	}
+
+	accessToken, err := s.getAccessTokenOrLogin(ctx, uid, user.Sid, user.Spwd)
+	if err != nil {
+		return nil, err
+	}
+
+	// 请求评教题目
+	questionURL := fmt.Sprintf("https://jxzlpt.csuft.edu.cn/api/xspj/xspj/getXspjTindexSystem?indexid=%s&pjcoursetype=%s",
+		indexId, url.QueryEscape(pjCourseType))
+	body, err := s.fetchWithAccessToken(ctx, "POST", questionURL, accessToken, nil)
+	if err != nil {
+		return nil, common.NewAppError(common.CodeJwcRequestFailed, "获取评教题目失败")
+	}
+	defer body.Close()
+
+	bodyBytes, err := io.ReadAll(body)
+	if err != nil {
+		return nil, common.NewAppError(common.CodeJwcParseFailed, "读取响应失败")
+	}
+
+	var questionResp EvaluationQuestionsResponse
+	if err := json.Unmarshal(bodyBytes, &questionResp); err != nil {
+		return nil, common.NewAppError(common.CodeJwcParseFailed, "解析评教题目响应失败")
+	}
+
+	if questionResp.Code != 200 {
+		return nil, common.NewAppError(common.CodeJwcRequestFailed, fmt.Sprintf("教评系统返回错误: %s", questionResp.Message))
+	}
+
+	return &questionResp.Data.PageData, nil
+}
+
+// SubmitEvaluation 提交评教
+func (s *evaluationService) SubmitEvaluation(ctx context.Context, uid int, submitData []EvaluationSubmitRequest) error {
+	user, err := s.userQuery.GetUserByUid(ctx, uid)
+	if err != nil {
+		return common.NewAppError(common.CodeInternalError, "查询数据库错误")
+	}
+
+	accessToken, err := s.getAccessTokenOrLogin(ctx, uid, user.Sid, user.Spwd)
+	if err != nil {
+		return err
+	}
+
+	// 序列化提交数据
+	jsonData, err := json.Marshal(submitData)
+	if err != nil {
+		return common.NewAppError(common.CodeInvalidParams, "序列化提交数据失败")
+	}
+
+	// 构造请求
+	submitURL := "https://jxzlpt.csuft.edu.cn/api/xspj/xspj/saveStudentComment"
+	req, err := http.NewRequestWithContext(ctx, "POST", submitURL, strings.NewReader(string(jsonData)))
+	if err != nil {
+		return common.NewAppError(common.CodeHttpRequestFailed, "创建请求失败")
+	}
+
+	// 设置请求头
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("Authorization", "Bearer"+accessToken)
+	req.Header.Set("Content-Type", "application/json;charset=UTF-8")
+
+	client := &http.Client{
+		Timeout: s.timeout,
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return common.NewAppError(common.CodeHttpRequestFailed, "提交评教失败")
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return common.NewAppError(common.CodeInvalidResponse, fmt.Sprintf("响应状态码异常: %d", resp.StatusCode))
+	}
+
+	// 解析响应
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return common.NewAppError(common.CodeJwcParseFailed, "读取响应失败")
+	}
+
+	var submitResp EvaluationSubmitResponse
+	if err := json.Unmarshal(bodyBytes, &submitResp); err != nil {
+		return common.NewAppError(common.CodeJwcParseFailed, "解析提交响应失败")
+	}
+
+	if submitResp.Code != 200 {
+		return common.NewAppError(common.CodeJwcRequestFailed, fmt.Sprintf("提交评教失败: %s", submitResp.Message))
+	}
+
+	return nil
+}
+
+// AutoEvaluation 自动评教 - 自动完成所有未评课程的评教
+func (s *evaluationService) AutoEvaluation(ctx context.Context, uid int) (*AutoEvaluationResult, error) {
+	user, err := s.userQuery.GetUserByUid(ctx, uid)
+	if err != nil {
+		return nil, common.NewAppError(common.CodeInternalError, "查询数据库错误")
+	}
+
+	// 确保已登录教评系统
+	_, err = s.getAccessTokenOrLogin(ctx, uid, user.Sid, user.Spwd)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &AutoEvaluationResult{
+		SuccessList: make([]string, 0),
+		FailedList:  make([]string, 0),
+		SkippedList: make([]string, 0),
+	}
+
+	// 1. 获取所有教评任务
+	tasks, err := s.GetEvaluationTasks(ctx, uid)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(*tasks) == 0 {
+		result.Message = "当前没有可用的教评任务"
+		return result, nil
+	}
+
+	// 2. 遍历每个任务
+	for _, task := range *tasks {
+		// 只处理进行中的任务
+		if task.CurrentStatus != "进行中" {
+			continue
+		}
+
+		// 3. 获取该任务下的所有课程
+		courses, err := s.GetEvaluationCourses(ctx, uid, task.TaskId)
+		if err != nil {
+			continue // 跳过获取失败的任务
+		}
+
+		result.TotalCourses += len(*courses)
+
+		// 4. 遍历每门课程
+		for _, course := range *courses {
+			// 跳过已评课程
+			if course.HasSubmit == 1 {
+				result.SkippedCourses++
+				result.EvaluatedCourses++
+				result.SkippedList = append(result.SkippedList, fmt.Sprintf("%s-%s", course.CourseName, course.TeacherName))
+				continue
+			}
+
+			// 5. 获取评教题目
+			questions, err := s.GetEvaluationQuestions(ctx, uid, task.IndexId, course.PjCourseType)
+			if err != nil {
+				result.FailedCourses++
+				result.FailedList = append(result.FailedList, fmt.Sprintf("%s-%s(获取题目失败)", course.CourseName, course.TeacherName))
+				continue
+			}
+
+			// 检查题目是否为空(学校未开放该类型课程的教评)
+			if len(*questions) == 0 {
+				result.FailedCourses++
+				result.FailedList = append(result.FailedList, fmt.Sprintf("%s-%s(该类型课程教评未开放)", course.CourseName, course.TeacherName))
+				continue
+			}
+
+			// 6. 自动生成答案(满分评价)
+			evaluateResult := make([]EvaluationAnswer, 0, len(*questions))
+			totalScore := 0
+
+			for _, q := range *questions {
+				answer := EvaluationAnswer{
+					IndexOrder: q.Ordor,
+					Sfbt:       q.IsEmptyed,
+					Yjzb:       q.FirstLevlIndex,
+					IndexType:  q.Type,
+					IndexId:    q.IndexId,
+				}
+
+				// 根据题目类型填充答案
+				if q.Type == "打分题" && q.IsScored == "是" {
+					// 打分题给满分
+					scoreStr := fmt.Sprintf("%.0f", q.Score)
+					answer.IndexScore = scoreStr
+					answer.IndexTitle = scoreStr
+					totalScore += int(q.Score)
+				} else if q.Type == "问答题" {
+					// 问答题可以为空或给默认好评
+					answer.IndexScore = "0"
+					if q.IsEmptyed == "否" {
+						// 必填问答题给默认好评
+						answer.IndexTitle = "老师授课认真负责，教学效果好"
+					} else {
+						answer.IndexTitle = ""
+					}
+				}
+
+				evaluateResult = append(evaluateResult, answer)
+			}
+
+			// 7. 构造提交数据
+			submitData := []EvaluationSubmitRequest{
+				{
+					TaskId:         task.TaskId,
+					ClassNo:        course.ClassNo,
+					CourseCode:     course.CourseCode,
+					CourseName:     course.CourseName,
+					JobNumber:      course.JobNumber,
+					StudentId:      course.StudentId,
+					StudentName:    course.StudentName,
+					TeacherName:    course.TeacherName,
+					YearTerm:       course.YearTerm,
+					TotalScore:     totalScore,
+					PjCourseType:   course.PjCourseType,
+					CourseOrgCode:  course.CourseOrgCode,
+					CourseOrgName:  course.CourseOrgName,
+					EvaluateResult: evaluateResult,
+					CommitTime:     time.Now().Format("2006-01-02 15:04:05"),
+				},
+			}
+
+			// 8. 提交评教
+			err = s.SubmitEvaluation(ctx, uid, submitData)
+			if err != nil {
+				result.FailedCourses++
+				result.FailedList = append(result.FailedList, fmt.Sprintf("%s-%s", course.CourseName, course.TeacherName))
+			} else {
+				result.SuccessCourses++
+				result.EvaluatedCourses++
+				result.SuccessList = append(result.SuccessList, fmt.Sprintf("%s-%s", course.CourseName, course.TeacherName))
+			}
+
+			// 避免请求过快,休眠一下
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+
+	// 生成总体结果消息
+	if result.TotalCourses == 0 {
+		result.Message = "当前没有需要评教的课程"
+	} else if result.FailedCourses == 0 {
+		result.Message = fmt.Sprintf("自动评教完成！成功评教 %d 门课程，跳过 %d 门已评课程", result.SuccessCourses, result.SkippedCourses)
+	} else {
+		result.Message = fmt.Sprintf("自动评教完成！成功 %d 门，失败 %d 门，跳过 %d 门", result.SuccessCourses, result.FailedCourses, result.SkippedCourses)
+	}
+
+	return result, nil
+}
+
+// GetEvaluationStatus 获取评教状态 - 查看所有任务下已评和未评的课程
+func (s *evaluationService) GetEvaluationStatus(ctx context.Context, uid int) (*EvaluationStatus, error) {
+	user, err := s.userQuery.GetUserByUid(ctx, uid)
+	if err != nil {
+		return nil, common.NewAppError(common.CodeInternalError, "查询数据库错误")
+	}
+
+	// 确保已登录教评系统
+	_, err = s.getAccessTokenOrLogin(ctx, uid, user.Sid, user.Spwd)
+	if err != nil {
+		return nil, err
+	}
+
+	status := &EvaluationStatus{
+		EvaluatedList:   make([]CourseInfo, 0),
+		UnevaluatedList: make([]CourseInfo, 0),
+		TaskDetails:     make([]TaskStatusDetail, 0),
+	}
+
+	// 1. 获取所有教评任务
+	tasks, err := s.GetEvaluationTasks(ctx, uid)
+	if err != nil {
+		return nil, err
+	}
+
+	status.TotalTasks = len(*tasks)
+
+	// 2. 遍历每个任务
+	for _, task := range *tasks {
+		taskDetail := TaskStatusDetail{
+			TaskId:        task.TaskId,
+			TaskName:      task.TaskName,
+			CurrentStatus: task.CurrentStatus,
+		}
+
+		// 统计进行中的任务
+		if task.CurrentStatus == "进行中" {
+			status.OngoingTasks++
+		}
+
+		// 3. 获取该任务下的所有课程
+		courses, err := s.GetEvaluationCourses(ctx, uid, task.TaskId)
+		if err != nil {
+			// 获取课程失败，跳过该任务
+			continue
+		}
+
+		taskDetail.TotalCourses = len(*courses)
+		status.TotalCourses += len(*courses)
+
+		// 4. 遍历课程，分类统计
+		for _, course := range *courses {
+			courseInfo := CourseInfo{
+				TaskId:       task.TaskId,
+				TaskName:     task.TaskName,
+				CourseName:   course.CourseName,
+				TeacherName:  course.TeacherName,
+				PjCourseType: course.PjCourseType,
+				HasSubmit:    course.HasSubmit,
+			}
+
+			if course.HasSubmit == 1 {
+				// 已评课程
+				status.EvaluatedCourses++
+				taskDetail.EvaluatedCourses++
+				status.EvaluatedList = append(status.EvaluatedList, courseInfo)
+			} else {
+				// 未评课程
+				status.UnevaluatedCourses++
+				taskDetail.UnevaluatedCourses++
+				status.UnevaluatedList = append(status.UnevaluatedList, courseInfo)
+			}
+		}
+
+		status.TaskDetails = append(status.TaskDetails, taskDetail)
+	}
+
+	return status, nil
 }

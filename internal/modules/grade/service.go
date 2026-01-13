@@ -953,7 +953,7 @@ func (s *gradeService) parseGradesFromHTML(r io.Reader) ([]Grade, error) {
 	})
 
 	if len(grades) == 0 {
-		return nil, common.NewAppError(common.CodeJwcParseFailed, "未解析到成绩")
+		return nil, common.NewAppError(common.CodeJwcParseFailed, "未解析到成绩,请检查是否评教")
 	}
 
 	return grades, nil
