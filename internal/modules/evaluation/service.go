@@ -280,10 +280,12 @@ func (s *evaluationService) fetchWithAccessToken(ctx context.Context, method, ta
 	}
 
 	resp, err := client.Do(req)
+
 	if err != nil {
 		return nil, common.NewAppError(common.CodeHttpRequestFailed, "请求失败")
 	}
 
+	fmt.Println(err)
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
 		return nil, common.NewAppError(common.CodeInvalidResponse, fmt.Sprintf("响应状态码异常: %d", resp.StatusCode))
@@ -554,11 +556,15 @@ func (s *evaluationService) AutoEvaluation(ctx context.Context, uid int) (*AutoE
 
 				// 根据题目类型填充答案
 				if q.Type == "打分题" && q.IsScored == "是" {
-					// 打分题给满分
-					scoreStr := fmt.Sprintf("%.0f", q.Score)
+					// 打分题给99分（满分减1分）
+					score99 := q.Score - 1
+					if score99 < 0 {
+						score99 = 0 // 防止负分
+					}
+					scoreStr := fmt.Sprintf("%.0f", score99)
 					answer.IndexScore = scoreStr
 					answer.IndexTitle = scoreStr
-					totalScore += int(q.Score)
+					totalScore += int(score99)
 				} else if q.Type == "问答题" {
 					// 问答题可以为空或给默认好评
 					answer.IndexScore = "0"

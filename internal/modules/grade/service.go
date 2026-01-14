@@ -253,8 +253,9 @@ func (s *gradeService) isAuthenticationError(err error) bool {
 	if appErr, ok := err.(*common.AppError); ok {
 		switch appErr.Code {
 		case common.CodeJwcLoginFailed, // 登录失败
-			common.CodeJwcNotBound,  // 未绑定
-			common.CodeUnauthorized: // 未授权/密码错误
+			common.CodeJwcNotBound,     // 未绑定
+			common.CodeJwcNotEvaluated, // 未完成教评
+			common.CodeUnauthorized:    // 未授权/密码错误
 			return true
 		}
 	}
@@ -524,10 +525,14 @@ func (s *gradeService) GetGradesByYear(ctx context.Context, uid int, year string
 		return nil, nil, err
 	}
 
-	// 解析第一学期成绩（如果没有成绩，返回空数组而不是错误）
+	// 解析第一学期成绩
 	gradeList1, err := s.parseGradesFromHTML(strings.NewReader(string(htmlBytes1)))
 	if err != nil {
-		// 如果是"未解析到成绩"的错误，说明该学期还没有成绩，使用空数组
+		// 如果是"未教评"错误，直接返回错误
+		if appErr, ok := err.(*common.AppError); ok && appErr.Code == common.CodeJwcNotEvaluated {
+			return nil, nil, err
+		}
+		// 如果是其他解析错误，说明该学期还没有成绩，使用空数组
 		gradeList1 = []Grade{}
 	}
 
@@ -555,10 +560,14 @@ func (s *gradeService) GetGradesByYear(ctx context.Context, uid int, year string
 		return nil, nil, err
 	}
 
-	// 解析第二学期成绩（如果没有成绩，返回空数组而不是错误）
+	// 解析第二学期成绩
 	gradeList2, err := s.parseGradesFromHTML(strings.NewReader(string(htmlBytes2)))
 	if err != nil {
-		// 如果是"未解析到成绩"的错误，说明该学期还没有成绩，使用空数组
+		// 如果是"未教评"错误，直接返回错误
+		if appErr, ok := err.(*common.AppError); ok && appErr.Code == common.CodeJwcNotEvaluated {
+			return nil, nil, err
+		}
+		// 如果是其他解析错误，说明该学期还没有成绩，使用空数组
 		gradeList2 = []Grade{}
 	}
 
@@ -898,6 +907,13 @@ func (s *gradeService) parseGradesFromHTML(r io.Reader) ([]Grade, error) {
 		return nil, common.NewAppError(common.CodeJwcParseFailed, "解析HTML失败")
 	}
 
+	// 检测是否包含"未教评"提示信息
+	// 教务系统在未完成教评时可能返回提示文本而非数据表格
+	bodyText := doc.Text()
+	if strings.Contains(bodyText, "未教评") || strings.Contains(bodyText, "教学评价") && strings.Contains(bodyText, "未完成") {
+		return nil, common.NewAppError(common.CodeJwcNotEvaluated, "您还有未完成的教学评价，请先完成教评后再查询成绩")
+	}
+
 	table := doc.Find("#dataList")
 	if table.Length() == 0 {
 		return nil, common.NewAppError(common.CodeJwcParseFailed, "未找到成绩数据")
@@ -953,7 +969,7 @@ func (s *gradeService) parseGradesFromHTML(r io.Reader) ([]Grade, error) {
 	})
 
 	if len(grades) == 0 {
-		return nil, common.NewAppError(common.CodeJwcParseFailed, "未解析到成绩,请检查是否评教")
+		return nil, common.NewAppError(common.CodeJwcNotEvaluated, "未查询到成绩数据，您可能还有未完成的教学评价，请先完成教评后再查询成绩")
 	}
 
 	return grades, nil
