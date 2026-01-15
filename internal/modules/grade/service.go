@@ -220,6 +220,11 @@ func (s *gradeService) GetAllGrades(ctx context.Context, uid int) ([]Grade, *GPA
 		return grades, gpa, nil
 	}
 
+	// 检查是否是"未教评"错误，直接返回，不清除绑定，也不降级到数据库
+	if appErr, ok := err.(*common.AppError); ok && appErr.Code == common.CodeJwcNotEvaluated {
+		return nil, nil, err
+	}
+
 	// 判断错误类型：登录失败/认证错误不降级，直接返回错误
 	if s.isAuthenticationError(err) {
 		log.Printf("[GetAllGrades] 认证错误，清除绑定信息：uid=%d, err=%v", uid, err)
@@ -253,9 +258,8 @@ func (s *gradeService) isAuthenticationError(err error) bool {
 	if appErr, ok := err.(*common.AppError); ok {
 		switch appErr.Code {
 		case common.CodeJwcLoginFailed, // 登录失败
-			common.CodeJwcNotBound,     // 未绑定
-			common.CodeJwcNotEvaluated, // 未完成教评
-			common.CodeUnauthorized:    // 未授权/密码错误
+			common.CodeJwcNotBound,  // 未绑定
+			common.CodeUnauthorized: // 未授权/密码错误
 			return true
 		}
 	}

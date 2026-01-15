@@ -57,6 +57,7 @@ type jwcSessionService struct {
 	captchaImageURL string
 	timeout         time.Duration
 	cacheExpire     time.Duration
+	tgcExpire       time.Duration // TGC cookie 的过期时间
 }
 
 // NewJwcSessionService 创建教务系统会话服务

@@ -33,6 +33,7 @@ type evaluationService struct {
 	userQuery       shared.UserQuery
 	sessionService  service.SessionService
 	evaluationCache cache.EvaluationCache
+	sessionCache    cache.SessionCache // 用于删除 TGC
 	// 教评系统相关 URL
 	evaluationInfoURL string
 	casRedirectURL    string // 教评系统 CAS 回调 URL（用于获取 ticket）
@@ -45,6 +46,7 @@ func NewService(
 	userQuery shared.UserQuery,
 	sessionService service.SessionService,
 	evaluationCache cache.EvaluationCache,
+	sessionCache cache.SessionCache,
 	evaluationInfoURL string,
 	casRedirectURL string,
 	doLoginURL string,
@@ -53,11 +55,12 @@ func NewService(
 		userQuery:         userQuery,
 		sessionService:    sessionService,
 		evaluationCache:   evaluationCache,
+		sessionCache:      sessionCache,
 		evaluationInfoURL: evaluationInfoURL,
 		casRedirectURL:    casRedirectURL,
 		doLoginURL:        doLoginURL,
 		timeout:           30 * time.Second,
-		cacheExpire:       time.Hour,
+		cacheExpire:       30 * time.Minute, // 教评 accessToken 缓存 30 分钟
 	}
 }
 
@@ -220,11 +223,13 @@ func (s *evaluationService) followRedirectsAndGetToken(ctx context.Context, clie
 	if loginResp.Data.AccessToken == "" {
 		return common.NewAppError(common.CodeJwcLoginFailed, "未获取到 accessToken")
 	}
-	fmt.Println(loginResp.Data.AccessToken)
 	// 8. 缓存 accessToken
 	if err := s.evaluationCache.SetAccessToken(ctx, uid, loginResp.Data.AccessToken, s.cacheExpire); err != nil {
 		return common.NewAppError(common.CodeCacheError, "缓存 accessToken 失败")
 	}
+
+	// 9. 成功获取 accessToken 后，立即删除 TGC（一次性使用）
+	_ = s.sessionCache.DeleteTGC(ctx, uid)
 
 	return nil
 }
@@ -285,7 +290,6 @@ func (s *evaluationService) fetchWithAccessToken(ctx context.Context, method, ta
 		return nil, common.NewAppError(common.CodeHttpRequestFailed, "请求失败")
 	}
 
-	fmt.Println(err)
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
 		return nil, common.NewAppError(common.CodeInvalidResponse, fmt.Sprintf("响应状态码异常: %d", resp.StatusCode))

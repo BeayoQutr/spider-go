@@ -298,6 +298,7 @@ func (c *Container) initModules() {
 		c.UserQuery,
 		c.SessionService,
 		c.EvaluationCache,
+		c.SessionCache, // 添加 SessionCache 用于删除 TGC
 		currentMode.EvaluationInfoURL,
 		currentMode.EvaluationRedirectURL,
 		currentMode.EvaluationDoLoginURL,
