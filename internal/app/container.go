@@ -15,6 +15,7 @@ import (
 	"spider-go/internal/modules/notice"
 	"spider-go/internal/modules/ranking"
 	"spider-go/internal/modules/reconciliation"
+	"spider-go/internal/modules/share"
 	"spider-go/internal/modules/statistics"
 	"spider-go/internal/modules/user"
 	"spider-go/internal/service"
@@ -68,6 +69,7 @@ type Container struct {
 	StatisticsModule     *statistics.Module
 	RankingModule        *ranking.Module
 	ReconciliationModule *reconciliation.Module
+	ShareModule          *share.Module
 }
 
 // NewContainer 创建依赖注入容器
@@ -326,6 +328,9 @@ func (c *Container) initModules() {
 		c.ConfigCache,
 		c.RankingModule.GetService(),
 	)
+
+	// Share Module（分享模块）
+	c.ShareModule = share.NewModule(c.UserQuery, c.CourseModule.GetService())
 
 	// 设置 Grade Module 的依赖（避免循环依赖，延迟注入）
 	c.GradeModule.SetGradeRepository(c.DB)

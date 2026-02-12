@@ -67,5 +67,8 @@ func SetupRoutes(r *gin.Engine, container *app.Container) {
 		container.RankingModule.RegisterRoutes(userAuth)
 		// 对账/同步模块
 		container.ReconciliationModule.RegisterRoutes(userAuth)
+
+		// 分享模块（公开 + 认证）
+		container.ShareModule.RegisterRoutes(api, userAuth)
 	}
 }

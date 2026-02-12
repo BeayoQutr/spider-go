@@ -7,19 +7,19 @@ import (
 
 // Service 排名服务接口
 type Service interface {
-	// 更新单个学生的GPA（在对账时调用）
+	// UpdateStudentGPA 更新单个学生的GPA（在对账时调用）
 	UpdateStudentGPA(ctx context.Context, data *StudentGPAData, statisticsType, statisticsTerm string) error
 
-	// 批量更新学生GPA
+	// BatchUpdateGPAs 批量更新学生GPA
 	BatchUpdateGPAs(ctx context.Context, dataList []*StudentGPAData, statisticsType, statisticsTerm string) error
 
-	// 获取我的排名
+	// GetMyRanking 获取我的排名
 	GetMyRanking(ctx context.Context, uid int, statisticsType, statisticsTerm string) (*MyRankingResponse, error)
 
-	// 查询排名（实时计算）- 保留用于内部调用
+	// GetStudentRanking 查询排名（实时计算）- 保留用于内部调用
 	GetStudentRanking(ctx context.Context, uid int, statisticsType, statisticsTerm string) (*RankingResponse, error)
 
-	// 统计 - 保留用于内部调用
+	// GetCollegeStats 统计 - 保留用于内部调用
 	GetCollegeStats(ctx context.Context, college, statisticsType, statisticsTerm string) (*CollegeRankingStats, error)
 }
 
