@@ -256,23 +256,31 @@ func (s *gradeService) isAuthenticationError(err error) bool {
 
 	// 检查是否是 AppError
 	if appErr, ok := err.(*common.AppError); ok {
+		// 明确排除的非认证错误
 		switch appErr.Code {
-		case common.CodeJwcLoginFailed, // 登录失败
+		case common.CodeJwcLoginTimeout, // 超时错误 - 应该降级到数据库
+			common.CodeJwcRequestFailed, // 请求失败（网络/服务器错误）- 应该降级
+			common.CodeJwcParseFailed,   // 解析失败 - 不是认证问题
+			common.CodeJwcMFARequired:   // MFA验证要求 - 不是密码错误
+			return false
+		}
+
+		// 真正的认证错误
+		switch appErr.Code {
+		case common.CodeJwcLoginFailed, // 登录失败（用户名/密码错误）
 			common.CodeJwcNotBound,  // 未绑定
-			common.CodeUnauthorized: // 未授权/密码错误
+			common.CodeUnauthorized: // 未授权
 			return true
 		}
 	}
 
-	// 检查错误信息是否包含登录相关关键字
+	// 检查错误信息是否包含登录相关关键字（作为后备检查）
 	errMsg := err.Error()
 	authKeywords := []string{
-		"登录失败",
+		"用户名或密码错误",
 		"密码错误",
 		"账号被锁",
-		"未绑定",
 		"认证失败",
-		"用户名或密码",
 	}
 	for _, keyword := range authKeywords {
 		if strings.Contains(errMsg, keyword) {

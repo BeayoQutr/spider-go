@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"spider-go/internal/cache"
@@ -545,11 +546,13 @@ func (s *evaluationService) AutoEvaluation(ctx context.Context, uid int) (*AutoE
 				continue
 			}
 
-			// 6. 自动生成答案(满分评价)
+			// 6. 自动生成答案 - 先给所有题满分，然后随机选一题减1分
 			evaluateResult := make([]EvaluationAnswer, 0, len(*questions))
 			totalScore := 0
+			scoreQuestionIndices := make([]int, 0) // 记录打分题的索引
 
-			for _, q := range *questions {
+			// 第一遍：给所有题满分
+			for i, q := range *questions {
 				answer := EvaluationAnswer{
 					IndexOrder: q.Ordor,
 					Sfbt:       q.IsEmptyed,
@@ -560,15 +563,12 @@ func (s *evaluationService) AutoEvaluation(ctx context.Context, uid int) (*AutoE
 
 				// 根据题目类型填充答案
 				if q.Type == "打分题" && q.IsScored == "是" {
-					// 打分题给99分（满分减1分）
-					score99 := q.Score - 1
-					if score99 < 0 {
-						score99 = 0 // 防止负分
-					}
-					scoreStr := fmt.Sprintf("%.0f", score99)
+					// 打分题给满分
+					scoreStr := fmt.Sprintf("%.0f", q.Score)
 					answer.IndexScore = scoreStr
 					answer.IndexTitle = scoreStr
-					totalScore += int(score99)
+					totalScore += int(q.Score)
+					scoreQuestionIndices = append(scoreQuestionIndices, i) // 记录打分题索引
 				} else if q.Type == "问答题" {
 					// 问答题可以为空或给默认好评
 					answer.IndexScore = "0"
@@ -581,6 +581,25 @@ func (s *evaluationService) AutoEvaluation(ctx context.Context, uid int) (*AutoE
 				}
 
 				evaluateResult = append(evaluateResult, answer)
+			}
+
+			// 第二遍：随机选择一道打分题减1分
+			if len(scoreQuestionIndices) > 0 {
+				// 随机选择一道打分题
+				randomIndex := scoreQuestionIndices[rand.Intn(len(scoreQuestionIndices))]
+				q := (*questions)[randomIndex]
+
+				// 减1分
+				score99 := q.Score - 1
+				if score99 < 0 {
+					score99 = 0 // 防止负分
+				}
+				scoreStr := fmt.Sprintf("%.0f", score99)
+				evaluateResult[randomIndex].IndexScore = scoreStr
+				evaluateResult[randomIndex].IndexTitle = scoreStr
+
+				// 调整总分
+				totalScore = totalScore - int(q.Score) + int(score99)
 			}
 
 			// 7. 构造提交数据

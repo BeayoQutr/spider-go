@@ -40,6 +40,7 @@ type JwcConfig struct {
 	Campus          JwcModeConfig `yaml:"campus" mapstructure:"campus"`
 	Webvpn          JwcModeConfig `yaml:"webvpn" mapstructure:"webvpn"`
 	GetRSAKeyURL    string        `yaml:"rsa_url" mapstructure:"rsa_url"`
+	MFADetectURL    string        `yaml:"mfa_detect_url" mapstructure:"mfa_detect_url"`
 	CaptchaURL      string        `yaml:"captcha_url" mapstructure:"captcha_url"`
 	CaptchaImageURL string        `yaml:"captcha_image_url" mapstructure:"captcha_image_url"`
 }

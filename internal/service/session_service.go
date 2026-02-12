@@ -8,8 +8,11 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -53,6 +56,7 @@ type jwcSessionService struct {
 	mode            string // 登录模式：campus 或 webvpn
 	loginURL        string
 	redirectURL     string
+	mfaDetectURL    string
 	captchaURL      string
 	captchaImageURL string
 	timeout         time.Duration
@@ -67,6 +71,7 @@ func NewJwcSessionService(
 	mode string,
 	loginURL string,
 	redirectURL string,
+	mfaDetectURL string,
 	captchaURL string,
 	captchaImageURL string,
 ) SessionService {
@@ -76,6 +81,7 @@ func NewJwcSessionService(
 		mode:            mode,
 		loginURL:        loginURL,
 		redirectURL:     redirectURL,
+		mfaDetectURL:    mfaDetectURL,
 		captchaURL:      captchaURL,
 		captchaImageURL: captchaImageURL,
 		timeout:         30 * time.Second,
@@ -102,7 +108,16 @@ func (s *jwcSessionService) LoginAndCache(ctx context.Context, uid int, username
 		// 重试间隔
 		time.Sleep(time.Second * time.Duration(i+1))
 	}
-	return common.NewAppError(common.CodeJwcLoginFailed, fmt.Sprintf("登录失败，请重试，连续三次失败将被锁定: %v", err))
+
+	// 保留原始错误码，不要强制改为 CodeJwcLoginFailed
+	// 如果是 AppError，保留原始错误码；否则包装为 CodeJwcLoginFailed
+	if appErr, ok := err.(*common.AppError); ok {
+		// 保留原始错误码，只修改错误消息提示重试次数
+		return common.NewAppError(appErr.Code, fmt.Sprintf("%s (已重试)", appErr.Message))
+	}
+
+	// 非 AppError 的错误，包装为 CodeJwcLoginFailed
+	return common.NewAppError(common.CodeJwcLoginFailed, fmt.Sprintf("登录失败，请重试: %v", err))
 }
 
 // loginAndCacheOnce 单次登录逻辑
@@ -120,6 +135,7 @@ func (s *jwcSessionService) followGET(client *http.Client, start string, maxHops
 
 		resp, err := client.Do(req)
 		if err != nil {
+			// 网络错误，不是认证问题
 			return nil, cur, err
 		}
 
@@ -133,7 +149,8 @@ func (s *jwcSessionService) followGET(client *http.Client, start string, maxHops
 		_ = resp.Body.Close()
 
 		if loc == "" {
-			return nil, cur, common.NewAppError(common.CodeJwcLoginFailed, "重定向缺少 Location")
+			// 重定向配置问题，不是认证问题
+			return nil, cur, common.NewAppError(common.CodeJwcRequestFailed, "重定向缺少 Location")
 		}
 
 		// 解析相对跳转
@@ -150,7 +167,8 @@ func (s *jwcSessionService) followGET(client *http.Client, start string, maxHops
 		lastReqURL = locURL
 	}
 
-	return nil, cur, common.NewAppError(common.CodeJwcLoginFailed, "重定向层级过多")
+	// 重定向层级过多，可能是配置问题或系统异常，不是认证问题
+	return nil, cur, common.NewAppError(common.CodeJwcRequestFailed, "重定向层级过多")
 }
 
 // GetCachedCookies 获取缓存的 cookies
@@ -231,6 +249,10 @@ func (s *jwcSessionService) LoginAndCacheWithConfig(ctx context.Context, uid int
 	// 1. 请求登录页获取 execution
 	res, err := client.Get(loginURL)
 	if err != nil {
+		// 检查是否是超时错误
+		if isTimeoutError(err) {
+			return common.NewAppError(common.CodeJwcLoginTimeout, "教务系统连接超时，请稍后重试")
+		}
 		return common.NewAppError(common.CodeJwcLoginFailed, "连接系统失败")
 	}
 	defer res.Body.Close()
@@ -260,6 +282,15 @@ func (s *jwcSessionService) LoginAndCacheWithConfig(ctx context.Context, uid int
 		return common.NewAppError(common.CodeInternalError, "生成设备指纹失败")
 	}
 
+	// 2.5 MFA 检测
+	needMFA, _, err := s.detectMFA(ctx, username, password, fpVisitorId)
+	if err != nil {
+		return err
+	}
+	if needMFA {
+		return common.NewAppError(common.CodeJwcMFARequired, "需要多因素认证，请前往i中南林APP进行验证")
+	}
+
 	form := url.Values{
 		"username":    {username},
 		"password":    {encryptedPwd},
@@ -274,7 +305,7 @@ func (s *jwcSessionService) LoginAndCacheWithConfig(ctx context.Context, uid int
 	// 3. 构造 POST 请求
 	req, err := http.NewRequest("POST", loginURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		return common.NewAppError(common.CodeJwcLoginFailed, "构造登录请求失败")
+		return common.NewAppError(common.CodeInternalError, "构造登录请求失败")
 	}
 
 	req.Header.Set("User-Agent", "Mozilla/5.0")
@@ -283,13 +314,32 @@ func (s *jwcSessionService) LoginAndCacheWithConfig(ctx context.Context, uid int
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return common.NewAppError(common.CodeJwcLoginFailed, "登录失败")
+		// 检查是否是超时错误
+		if isTimeoutError(err) {
+			return common.NewAppError(common.CodeJwcLoginTimeout, "教务系统登录请求超时，请稍后重试")
+		}
+		// 网络错误，不是认证错误
+		return common.NewAppError(common.CodeJwcRequestFailed, "教务系统网络连接失败，请检查网络")
 	}
 
 	resp.Body.Close()
 
-	if resp.StatusCode != 302 {
-		return common.NewAppError(common.CodeJwcLoginFailed, "重定向并非302")
+	// CAS 登录的预期行为：
+	// - 302: 登录成功，跳转到目标系统
+	// - 200: 登录失败，返回登录表单页面（用户名或密码错误）
+	// - 5xx: 服务器错误
+	// - 其他: 异常情况
+	if resp.StatusCode == 200 {
+		// 返回 200 表示登录失败（表单页面），通常是用户名或密码错误
+		return common.NewAppError(common.CodeJwcLoginFailed, "用户名或密码错误")
+	} else if resp.StatusCode == 302 {
+		// 登录成功，继续后续流程
+	} else if resp.StatusCode >= 500 {
+		// 服务器错误，不是认证问题
+		return common.NewAppError(common.CodeJwcRequestFailed, fmt.Sprintf("教务系统服务器错误: %d", resp.StatusCode))
+	} else {
+		// 其他状态码（4xx 等），可能是系统配置问题或异常
+		return common.NewAppError(common.CodeJwcRequestFailed, fmt.Sprintf("教务系统返回异常状态码: %d", resp.StatusCode))
 	}
 
 	// 4. 提取并缓存 CAS TGC cookie（登录成功后立即保存）
@@ -306,7 +356,15 @@ func (s *jwcSessionService) LoginAndCacheWithConfig(ctx context.Context, uid int
 	// 直接不处理重定向，用这个tgc的cookie去get系统，触发下一条重定向链，get全自动重定向
 	finalResp, finalURL, err := s.followGET(client, redirectURL, 8)
 	if err != nil {
-		return common.NewAppError(common.CodeJwcLoginFailed, "跟随重定向失败")
+		// 重定向失败可能是网络问题或目标系统不可达，不是认证问题
+		// 检查是否是超时错误
+		if appErr, ok := err.(*common.AppError); ok {
+			return appErr // 保留原始错误
+		}
+		if isTimeoutError(err) {
+			return common.NewAppError(common.CodeJwcRequestFailed, "跟随重定向超时，教务系统响应缓慢")
+		}
+		return common.NewAppError(common.CodeJwcRequestFailed, "跟随重定向失败，教务系统可能暂时不可用")
 	}
 	defer finalResp.Body.Close()
 
@@ -388,6 +446,15 @@ func (s *jwcSessionService) LoginAndGetClient(ctx context.Context, username, pas
 		return nil, common.NewAppError(common.CodeInternalError, "生成设备指纹失败")
 	}
 
+	// MFA 检测
+	needMFA, _, err := s.detectMFA(ctx, username, password, fpVisitorId)
+	if err != nil {
+		return nil, err
+	}
+	if needMFA {
+		return nil, common.NewAppError(common.CodeJwcMFARequired, "需要多因素认证，请前往i中南林APP进行验证")
+	}
+
 	form := url.Values{
 		"username":    {username},
 		"password":    {encryptedPwd},
@@ -411,12 +478,23 @@ func (s *jwcSessionService) LoginAndGetClient(ctx context.Context, username, pas
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, common.NewAppError(common.CodeJwcLoginFailed, "登录失败")
+		// 检查是否是超时错误
+		if isTimeoutError(err) {
+			return nil, common.NewAppError(common.CodeJwcLoginTimeout, "教务系统登录请求超时")
+		}
+		return nil, common.NewAppError(common.CodeJwcRequestFailed, "教务系统网络连接失败")
 	}
 	resp.Body.Close()
 
-	if resp.StatusCode != 302 {
-		return nil, common.NewAppError(common.CodeJwcLoginFailed, "CAS 登录失败，未收到重定向")
+	if resp.StatusCode == 200 {
+		// 返回 200 表示登录失败（表单页面）
+		return nil, common.NewAppError(common.CodeJwcLoginFailed, "用户名或密码错误")
+	} else if resp.StatusCode == 302 {
+		// 登录成功
+	} else if resp.StatusCode >= 500 {
+		return nil, common.NewAppError(common.CodeJwcRequestFailed, fmt.Sprintf("教务系统服务器错误: %d", resp.StatusCode))
+	} else {
+		return nil, common.NewAppError(common.CodeJwcRequestFailed, fmt.Sprintf("教务系统返回异常状态码: %d", resp.StatusCode))
 	}
 
 	// TGC cookie 已在 jar 中，返回 client
@@ -473,6 +551,15 @@ func (s *jwcSessionService) LoginCheck(ctx context.Context, username, password s
 		return common.NewAppError(common.CodeInternalError, "生成设备指纹失败")
 	}
 
+	// MFA 检测
+	needMFA, _, err := s.detectMFA(ctx, username, password, fpVisitorId)
+	if err != nil {
+		return err
+	}
+	if needMFA {
+		return common.NewAppError(common.CodeJwcMFARequired, "需要多因素认证，请前往i中南林APP进行验证")
+	}
+
 	form := url.Values{
 		"username":    {username},
 		"password":    {encryptedPwd},
@@ -496,14 +583,116 @@ func (s *jwcSessionService) LoginCheck(ctx context.Context, username, password s
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return common.NewAppError(common.CodeJwcLoginFailed, "登录失败")
+		// 检查是否是超时错误
+		if isTimeoutError(err) {
+			return common.NewAppError(common.CodeJwcLoginTimeout, "教务系统登录请求超时")
+		}
+		return common.NewAppError(common.CodeJwcRequestFailed, "教务系统网络连接失败")
 	}
 	resp.Body.Close()
 
-	if resp.StatusCode != 302 {
-		return common.NewAppError(common.CodeJwcLoginFailed, "CAS 登录失败，未收到重定向")
+	if resp.StatusCode == 200 {
+		// 返回 200 表示登录失败（表单页面）
+		return common.NewAppError(common.CodeJwcLoginFailed, "用户名或密码错误")
+	} else if resp.StatusCode == 302 {
+		// 登录成功
+	} else if resp.StatusCode >= 500 {
+		return common.NewAppError(common.CodeJwcRequestFailed, fmt.Sprintf("教务系统服务器错误: %d", resp.StatusCode))
+	} else {
+		return common.NewAppError(common.CodeJwcRequestFailed, fmt.Sprintf("教务系统返回异常状态码: %d", resp.StatusCode))
 	}
 
 	// TGC cookie 已在 jar 中，返回 client
 	return nil
+}
+
+// isTimeoutError 判断错误是否为超时错误
+func isTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// 检查是否是 url.Error（http.Client.Do 返回的错误类型）
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		// 检查是否是超时错误
+		if urlErr.Timeout() {
+			return true
+		}
+		// 检查底层错误是否是网络超时
+		var netErr net.Error
+		if errors.As(urlErr.Err, &netErr) && netErr.Timeout() {
+			return true
+		}
+	}
+
+	// 直接检查是否是 net.Error 类型的超时
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+
+	return false
+}
+
+// detectMFA 检测是否需要多因素认证
+// 返回 (needMFA, state, error)
+func (s *jwcSessionService) detectMFA(ctx context.Context, username, password, fpVisitorID string) (bool, string, error) {
+	// 如果 MFA 检测 URL 未配置，跳过检测
+	if s.mfaDetectURL == "" {
+		return false, "", nil
+	}
+
+	// 加密密码
+	encryptedPwd, err := s.encryptPassword(password)
+	if err != nil {
+		return false, "", err
+	}
+
+	// 构造请求体 (application/x-www-form-urlencoded)
+	formData := url.Values{
+		"username":    {username},
+		"password":    {encryptedPwd},
+		"fpVisitorId": {fpVisitorID},
+	}
+
+	// 创建 HTTP 请求
+	req, err := http.NewRequestWithContext(ctx, "POST", s.mfaDetectURL, strings.NewReader(formData.Encode()))
+	if err != nil {
+		return false, "", common.NewAppError(common.CodeInternalError, "创建 MFA 检测请求失败")
+	}
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+
+	// 发送请求
+	client := &http.Client{Timeout: s.timeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		if isTimeoutError(err) {
+			return false, "", common.NewAppError(common.CodeJwcLoginTimeout, "MFA 检测请求超时")
+		}
+		return false, "", common.NewAppError(common.CodeJwcRequestFailed, "MFA 检测请求失败")
+	}
+	defer resp.Body.Close()
+
+	// 解析响应
+	var mfaResponse struct {
+		Code int `json:"code"`
+		Data struct {
+			Need  bool   `json:"need"`
+			State string `json:"state"`
+		} `json:"data"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&mfaResponse); err != nil {
+		return false, "", common.NewAppError(common.CodeJwcParseFailed, "解析 MFA 检测响应失败")
+	}
+
+	// 检查响应状态
+	if mfaResponse.Code != 0 {
+		return false, "", common.NewAppError(common.CodeJwcRequestFailed, fmt.Sprintf("MFA 检测失败，错误码: %d", mfaResponse.Code))
+	}
+
+	return mfaResponse.Data.Need, mfaResponse.Data.State, nil
 }

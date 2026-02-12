@@ -37,12 +37,30 @@ go build -ldflags="-s -w" -o spider-go-production.exe
 # Install/update dependencies
 go mod download
 
-# Tidy dependencies
+# Tidy dependencies (run this after adding/removing imports)
 go mod tidy
+
+# Format imports (useful when adding new imports)
+go run golang.org/x/tools/cmd/goimports@latest -w .
+
+# Verify dependencies
+go mod verify
 ```
+
+**Go Version**: This project requires Go 1.25 or higher (see `go.mod`).
 
 ### Database
 The application uses GORM with auto-migration. Database tables are created automatically on startup. No migration commands needed.
+
+### Debugging and Development
+```bash
+# Run with timeout (useful for testing)
+timeout 2 ./spider-go.exe   # Windows
+timeout 2s ./spider-go      # Linux/Mac
+
+# Build and test quickly
+go build -o spider-go-test && ./spider-go-test
+```
 
 ## Architecture
 
@@ -59,7 +77,9 @@ internal/
 │   ├── evaluation/       # Course evaluations
 │   ├── exam/             # Exam schedules
 │   ├── grade/            # Grade queries
+│   ├── isdead/           # Health check endpoint
 │   ├── notice/           # System notices
+│   ├── power/            # Power query (electricity usage)
 │   ├── ranking/          # Grade rankings
 │   ├── reconciliation/   # Data synchronization
 │   ├── statistics/       # Statistics queries
@@ -81,6 +101,14 @@ pkg/                      # Reusable libraries
 
 **Note**: Some legacy service layer code still exists in `internal/service/` but only for infrastructure concerns (SessionService, CrawlerService, EmailService). Domain logic lives in modules.
 
+### Shared Utilities
+
+**`internal/shared/`**: Cross-module utilities that don't belong to any single domain
+- `UserQuery`: Common user query operations used across multiple modules (avoids circular dependencies)
+
+**`internal/utils/`**: General purpose utilities
+- Helper functions used throughout the application
+
 ### Dependency Injection Container
 
 The entire application is built around a centralized dependency injection container (`internal/app/container.go`). **Never use global variables** - all dependencies flow through the container:
@@ -93,6 +121,7 @@ The entire application is built around a centralized dependency injection contai
 2. **Adding new components**:
    - **For new modules**: Create in `internal/modules/yourmodule/` following the module pattern below
    - Always add module initialization to `container.initModules()`
+   - **Handling circular dependencies**: Use delayed injection via setter methods (see Grade ↔ Reconciliation modules example in `container.go:329-334`)
 
 ### Module Architecture
 
@@ -127,7 +156,9 @@ Switch modes by setting `jwc.mode` in config files. The container automatically 
 
 ### Session Management
 
-Educational system sessions are cached in Redis (DB 0) with 1-hour expiration:
+Educational system sessions are cached in Redis (DB 0):
+- **Session cookies**: 1-hour expiration
+- **TGC (Ticket Granting Cookie)**: One-time use - automatically deleted after being used for evaluation system login
 - `SessionService` handles login and cookie caching
 - Retry logic: 3 attempts for login
 - RSA encryption for passwords using public key from CAS server
@@ -137,6 +168,8 @@ Educational system sessions are cached in Redis (DB 0) with 1-hour expiration:
 
 **Redis DB 0** (session Redis):
 - User login sessions (1 hour expiration)
+- TGC cookies (one-time use, deleted after evaluation login)
+- Evaluation system accessToken (30 minutes expiration)
 - DAU (Daily Active Users) statistics (30 days retention)
 - System configuration (permanent)
 - User data cache (grades, courses, exams)
@@ -155,6 +188,13 @@ Educational system sessions are cached in Redis (DB 0) with 1-hour expiration:
 - Separate authentication from users
 - Uses same JWT secret but different claims
 
+### WeChat Integration
+
+The application supports WeChat login and binding:
+- WeChat configuration in `wx` section of config files (`app_id`, `app_secret`)
+- WeChat-specific error codes in `60xxx` series
+- Users can bind their WeChat account to the educational system account
+
 ### Scheduled Tasks
 
 The application uses `github.com/robfig/cron/v3` for scheduled tasks. Task definitions are in `internal/scheduler/tasks/`:
@@ -162,7 +202,7 @@ The application uses `github.com/robfig/cron/v3` for scheduled tasks. Task defin
 **Current scheduled tasks** (configured in `main.go`):
 - **RSA public key refresh**: Every hour (`0 * * * *`) - Fetches latest RSA public key from CAS server
 - **Reset bind count**: Monthly on 1st at midnight (`0 0 1 * *`) - Resets user educational system binding limits
-- **User data sync**: Daily at 2 AM (`0 2 * * *`) - Pre-caches user grades/courses/exams
+- **User data sync**: Monthly on 1st at 2 AM (`0 2 1 * *`) - Pre-caches user grades/courses/exams for all bound users
 
 **Adding a new scheduled task**:
 1. Create task in `internal/scheduler/tasks/your_task.go` implementing the `Task` interface
@@ -170,10 +210,35 @@ The application uses `github.com/robfig/cron/v3` for scheduled tasks. Task defin
 
 ### Error Handling
 
-Custom error system in `internal/common/errors.go`:
-- `AppError` with error codes
+Custom error system in `internal/common/errors.go` and `pkg/errors/errors.go`:
+- `AppError` with error codes - defines standardized error structure
+- Error codes are centralized in `pkg/errors/errors.go` and re-exported from `internal/common/errors.go` for backward compatibility
 - Standardized response format via `internal/common/response.go`
-- Always use `NewAppError` for service-level errors
+- Always use `NewAppError(code, message)` for service-level errors
+- Use `IsAppError(err)` to check if an error is an AppError
+
+**Common error codes**:
+- `40xxx` series: Client errors (invalid params, unauthorized, not found, etc.)
+- `50xxx` series: Server errors (internal error, database error, cache error, etc.)
+- `60xxx` series: WeChat-specific errors
+
+**Grade Query Error Handling**:
+The grade module has sophisticated error handling with different strategies based on error type:
+- **Unevaluated courses error** (`CodeJwcNotEvaluated`): Returns error directly without clearing binding or falling back to database
+- **Authentication errors** (login failed, not bound, unauthorized): Clears user binding and returns error without database fallback
+- **Timeout/network errors**: Falls back to database cache if available
+
+### Evaluation System
+
+**Auto-Evaluation Logic**:
+- Scoring strategy: Assigns full marks to all questions, then randomly selects ONE question to deduct 1 point
+- This makes automated evaluations appear more natural and realistic
+- Uses `math/rand` for random question selection
+
+**Token Management**:
+- Evaluation system uses separate `accessToken` (30-minute expiration)
+- TGC cookies are one-time use and deleted immediately after obtaining accessToken
+- Login flow: CAS login → Get TGC → Access evaluation redirect → Get userToken → Call doLogin → Get accessToken
 
 ### Crawler Service
 
@@ -253,7 +318,7 @@ func (s *gradeService) GetAllGrades(ctx context.Context, uid int) ([]Grade, erro
 4. **Register in container**: Add to `internal/app/container.go`:
    - Add module field to `Container` struct
    - Initialize in `initModules()` method
-5. **Register routes**: Add `container.YourModule.RegisterRoutes(...)` in `internal/api/routes.go`
+5. **Register routes**: Call `container.YourModule.RegisterRoutes(...)` in `api.SetupRoutes()` function in `internal/api/routes.go`
 
 ### Adding a Scheduled Task
 
@@ -299,8 +364,9 @@ Restart application. No code changes needed - URLs are injected automatically.
 
 ## Important Notes
 
-- **No tests exist yet** - the project currently lacks unit and integration tests
+- **No tests exist yet** - the project currently lacks unit and integration tests. There are no test files or testing infrastructure set up.
 - **Auto-migration only** - GORM creates tables on startup, no manual migrations
+- **Go 1.25 required** - The project requires Go 1.25 or higher as specified in `go.mod`
 - **Default admin**: Created on first startup with email `admin@spider-go.com` / password `123456` (change immediately in production)
 - **CORS**: Configured per environment in config files under `cors` section
 - **Graceful shutdown**: SIGINT/SIGTERM signals trigger cleanup of DB and Redis connections
@@ -308,10 +374,14 @@ Restart application. No code changes needed - URLs are injected automatically.
 
 ## Database Schema
 
-Tables auto-created by GORM:
+Tables auto-created by GORM (auto-migration on startup):
 - `users`: User accounts and bound educational system credentials
 - `administrators`: Admin accounts (separate from users)
 - `notices`: System notifications with display flags
+- Grade/course/exam data tables: Cached educational system data for offline access
+- WeChat binding tables: User-WeChat account associations
+
+All tables are created automatically via GORM's auto-migration feature. The schema is inferred from struct tags in model files.
 
 ## Configuration Checklist for Deployment
 
@@ -322,4 +392,6 @@ Before deploying, update `config/config.production.yaml`:
 4. Configure `email` SMTP settings for verification codes
 5. Set correct `cors.allow_origins` for your frontend domain(s)
 6. Choose appropriate `jwc.mode` (campus vs webvpn) based on network
-7. Change default admin password after first login via admin API
+7. Configure `wx.app_id` and `wx.app_secret` for WeChat integration (if using)
+8. Review and configure OSS settings if file upload functionality is needed
+9. Change default admin password after first login via admin API

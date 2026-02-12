@@ -34,9 +34,9 @@ func (t *UserSyncTask) Name() string {
 	return "用户数据自动同步"
 }
 
-// Cron Cron 表达式（每天凌晨2点执行）
+// Cron Cron 表达式（每月1号凌晨2点执行）
 func (t *UserSyncTask) Cron() string {
-	return "0 2 * * *"
+	return "0 2 1 * *"
 }
 
 // Run 执行任务

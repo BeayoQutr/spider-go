@@ -84,6 +84,7 @@ jwc:
 
   # 公共配置
   rsa_url: "https://cas.csuft.edu.cn/cas/jwt/publicKey"
+  mfa_detect_url: "https://cas.csuft.edu.cn/cas/mfa/detect"
   captcha_url: "https://cas.csuft.edu.cn/cas/needCaptcha.html?"
   captcha_image_url: "https://cas.csuft.edu.cn/cas/captcha.html?"
 

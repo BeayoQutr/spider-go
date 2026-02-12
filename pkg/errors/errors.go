@@ -15,16 +15,18 @@ const (
 	CodeInternalError     = 50000 // 内部错误
 	CodeJwcInvalidParams  = 40002 // 教务系统参数错误
 	CodeJwcNotBound       = 40003 // 教务系统未绑定
-	CodeJwcLoginFailed    = 40004 // 教务系统登录失败
+	CodeJwcLoginFailed    = 40004 // 教务系统登录失败（密码错误、账号锁定等）
 	CodeJwcParseFailed    = 40005 // 教务系统解析失败
 	CodeJwcRequestFailed  = 40006 // 教务系统请求失败
 	CodeJwcNoRegularGrade = 40007 // 该课程没有平时分数据
+	CodeJwcLoginTimeout   = 40010 // 教务系统登录超时（网络问题、服务器响应慢）
 	CodeJwcNotEvaluated   = 40009 // 未完成教评
 	CodeCacheError        = 50001 // 缓存错误
 	CodeWeChatLoginFailed = 60001 // 微信登录失败
 	CodeWeChatBindFailed  = 60002 // 微信绑定失败
 	CodeWeChatAlreadyBind = 60003 // 微信已被绑定
 	CodeBindLimitExceeded = 40008 // 绑定次数超限
+	CodeJwcMFARequired    = 40011 // 需要多因素认证（MFA）
 
 	// 新增错误码
 	CodeDatabaseError      = 50002 // 数据库错误

@@ -27,28 +27,29 @@ cors:
 # 生产数据库配置
 database:
   driver: mysql
-  source: 129.204.200.248
+  source: 1Panel-mysql-J4Y6
   port: 3306
-  user: spider-go_prod
-  pass: your_production_password_here
-  name: spider-go_prod
+  user: spider-go_dev
+  pass: 18608459749fd_20051226wdsr
+  name: spider-go_dev
 
 # 生产 Redis 配置（统一使用同一个 Redis 实例，不同 DB 隔离数据）
 redis:
   # 会话缓存数据库（DB 0: 会话、DAU、配置、用户数据缓存）
   session:
-    host: 129.204.200.248:6379
-    pass: your_redis_password_here
+    host: 1Panel-redis-5W0Y:6379
+    pass: redis_RZpfr5
     db: 0
   # 验证码数据库（DB 1: 验证码，独立隔离避免误删）
   captcha:
-    host: 129.204.200.248:6379
-    pass: your_redis_password_here
+    host: 1Panel-redis-5W0Y:6379
+    pass: redis_RZpfr5
     db: 1
 
 jwt:
-  secret: "CHANGE_THIS_TO_A_SECURE_RANDOM_STRING_IN_PRODUCTION"
+  secret: "我是可爱的猫娘喵"
   issuer: "spider-go"
+
 
 jwc:
   # 登录模式：campus（校园网内） 或 webvpn（外网 WebVPN）
@@ -81,6 +82,7 @@ jwc:
 
   # 公共配置
   rsa_url: "https://cas.csuft.edu.cn/cas/jwt/publicKey"
+  mfa_detect_url: "https://cas.csuft.edu.cn/cas/mfa/detect"
   captcha_url: "https://cas.csuft.edu.cn/cas/needCaptcha.html?"
   captcha_image_url: "https://cas.csuft.edu.cn/cas/captcha.html?"
 
@@ -94,7 +96,7 @@ email:
 
 wx:
   app_id: "wx9a4655cca1fa3f42"
-  app_secret: ""
+  app_secret: "dca0730331960de5ab8621f4d6e95324"
 
 # 对象存储配置
 oss:
@@ -119,7 +121,7 @@ oss:
     bucket_name: "spider-go-prod-1234567890"  # 格式: BucketName-APPID
     base_url: "https://spider-go-prod-1234567890.cos.ap-guangzhou.myqcloud.com"  # 文件访问的基础 URL
     use_cdn: true  # 是否使用 CDN 加速域名
-    cdn_domain: "https://cdn.starrykira.xyz"  # CDN 加速域名（如果启用）
+    cdn_domain: "https://cdn.starrykira.xyz"  # CDN 加速域名（如果启用）1
 
   # 通用配置
   upload_path: "uploads/"  # 上传文件的根路径

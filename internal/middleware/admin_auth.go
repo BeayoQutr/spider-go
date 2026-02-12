@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"fmt"
 	"spider-go/internal/common"
 	"spider-go/internal/shared"
 	"strings"
@@ -39,6 +40,8 @@ func AdminAuthMiddleware(secret []byte) gin.HandlerFunc {
 
 		// 验证是否为管理员
 		if !claims.IsAdmin {
+			// 添加调试日志
+			c.Error(fmt.Errorf("[AdminAuth] IsAdmin=false, uid=%d, name=%s", claims.Uid, claims.Name))
 			common.Error(c, common.CodeForbidden, "需要管理员权限")
 			c.Abort()
 			return

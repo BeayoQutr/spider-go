@@ -204,6 +204,7 @@ func (c *Container) initServices() {
 		c.Config.Jwc.Mode, // 注入当前模式
 		currentMode.LoginURL,
 		currentMode.RedirectURL,
+		c.Config.Jwc.MFADetectURL,
 		c.Config.Jwc.CaptchaURL,
 		c.Config.Jwc.CaptchaImageURL,
 	)

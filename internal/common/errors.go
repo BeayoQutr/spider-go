@@ -21,8 +21,10 @@ const (
 	CodeJwcParseFailed    = pkgerrors.CodeJwcParseFailed
 	CodeJwcRequestFailed  = pkgerrors.CodeJwcRequestFailed
 	CodeJwcNoRegularGrade = pkgerrors.CodeJwcNoRegularGrade
+	CodeJwcLoginTimeout   = pkgerrors.CodeJwcLoginTimeout
 	CodeJwcNotEvaluated   = pkgerrors.CodeJwcNotEvaluated
 	CodeBindLimitExceeded = pkgerrors.CodeBindLimitExceeded
+	CodeJwcMFARequired    = pkgerrors.CodeJwcMFARequired
 	CodeCacheError        = pkgerrors.CodeCacheError
 	CodeWeChatLoginFailed = pkgerrors.CodeWeChatLoginFailed
 	CodeWeChatBindFailed  = pkgerrors.CodeWeChatBindFailed
