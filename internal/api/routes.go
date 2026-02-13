@@ -70,5 +70,8 @@ func SetupRoutes(r *gin.Engine, container *app.Container) {
 
 		// 分享模块（公开 + 认证）
 		container.ShareModule.RegisterRoutes(api, userAuth)
+
+		// 选课提示模块
+		container.CourseTipsModule.RegisterRoutes(userAuth)
 	}
 }

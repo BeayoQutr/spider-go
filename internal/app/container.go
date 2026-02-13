@@ -9,6 +9,7 @@ import (
 	"spider-go/internal/modules/admin"
 	"spider-go/internal/modules/config"
 	"spider-go/internal/modules/course"
+	"spider-go/internal/modules/coursetips"
 	"spider-go/internal/modules/evaluation"
 	"spider-go/internal/modules/exam"
 	"spider-go/internal/modules/grade"
@@ -70,6 +71,7 @@ type Container struct {
 	RankingModule        *ranking.Module
 	ReconciliationModule *reconciliation.Module
 	ShareModule          *share.Module
+	CourseTipsModule     *coursetips.Module
 }
 
 // NewContainer 创建依赖注入容器
@@ -331,6 +333,9 @@ func (c *Container) initModules() {
 
 	// Share Module（分享模块）
 	c.ShareModule = share.NewModule(c.UserQuery, c.CourseModule.GetService())
+
+	// CourseTips Module（选课提示模块）
+	c.CourseTipsModule = coursetips.NewModule(c.DB, c.SessionRedis)
 
 	// 设置 Grade Module 的依赖（避免循环依赖，延迟注入）
 	c.GradeModule.SetGradeRepository(c.DB)

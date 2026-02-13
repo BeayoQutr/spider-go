@@ -218,7 +218,7 @@ func (s *service) syncGrades(ctx context.Context, task *SyncTask, uids []int) er
 				// 未变化
 				task.UnchangedRecords++
 				newGrade.ID = local.ID
-				logs = append(logs, s.createLog(task.TaskID, uid, "grade", key, SyncActionSkip, nil, newGrade, true, ""))
+				logs = append(logs, s.createLog(task.TaskID, uid, "grade", key, SyncActionSkip, nil, nil, true, ""))
 			}
 
 			grades = append(grades, newGrade)
@@ -355,7 +355,7 @@ func (s *service) syncRegularGrades(ctx context.Context, task *SyncTask, uids []
 				// 未变化
 				task.UnchangedRecords++
 				newRegularGrade.ID = local.ID
-				logs = append(logs, s.createLog(task.TaskID, uid, "regular_grade", key, SyncActionSkip, nil, newRegularGrade, true, ""))
+				logs = append(logs, s.createLog(task.TaskID, uid, "regular_grade", key, SyncActionSkip, nil, nil, true, ""))
 			}
 
 			regularGrades = append(regularGrades, newRegularGrade)
@@ -485,7 +485,7 @@ func (s *service) syncExams(ctx context.Context, task *SyncTask, uids []int) err
 					// 未变化
 					task.UnchangedRecords++
 					newExam.ID = local.ID
-					logs = append(logs, s.createLog(task.TaskID, uid, "exam", key, SyncActionSkip, nil, newExam, true, ""))
+					logs = append(logs, s.createLog(task.TaskID, uid, "exam", key, SyncActionSkip, nil, nil, true, ""))
 				}
 
 				exams = append(exams, newExam)
@@ -596,7 +596,7 @@ func (s *service) syncLevelExams(ctx context.Context, task *SyncTask, uids []int
 				// 未变化
 				task.UnchangedRecords++
 				newLevelExam.ID = local.ID
-				logs = append(logs, s.createLog(task.TaskID, uid, "level_exam", key, SyncActionSkip, nil, newLevelExam, true, ""))
+				logs = append(logs, s.createLog(task.TaskID, uid, "level_exam", key, SyncActionSkip, nil, nil, true, ""))
 			}
 
 			levelExams = append(levelExams, newLevelExam)
@@ -726,7 +726,7 @@ func (s *service) syncCourses(ctx context.Context, task *SyncTask, uids []int) e
 						// 未变化
 						task.UnchangedRecords++
 						newCourse.ID = local.ID
-						logs = append(logs, s.createLog(task.TaskID, uid, "course", key, SyncActionSkip, nil, newCourse, true, ""))
+						logs = append(logs, s.createLog(task.TaskID, uid, "course", key, SyncActionSkip, nil, nil, true, ""))
 					}
 
 					courses = append(courses, newCourse)

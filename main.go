@@ -93,5 +93,10 @@ func initScheduler(container *app.Container) *scheduler.Scheduler {
 		container.ReconciliationModule.GetService(),
 	))
 
+	// 添加同步日志清理任务（每天凌晨3点执行）
+	s.AddTask(tasks.NewSyncLogCleanupTask(
+		container.ReconciliationModule.GetRepository(),
+	))
+
 	return s
 }

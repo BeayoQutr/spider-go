@@ -17,17 +17,19 @@ import (
 type Module struct {
 	handler *Handler
 	service *service // 改为具体类型以便调用 SetUserQuery
+	repo    Repository
 }
 
 // NewModule 创建对账模块
 func NewModule(db *gorm.DB, gradeService grade.Service, examService exam.Service, courseService course.Service, configCache cache.ConfigCache, rankingService ranking.Service) *Module {
 	repo := NewRepository(db)
 	svc := NewService(repo, gradeService, examService, courseService, configCache, rankingService)
-	handler := NewHandler(svc)
+	handler := NewHandler(svc, repo)
 
 	return &Module{
 		handler: handler,
 		service: svc.(*service), // 类型断言
+		repo:    repo,
 	}
 }
 
@@ -50,4 +52,9 @@ func (m *Module) GetService() Service {
 // SetUserQuery 设置用户查询接口（用于清除绑定）
 func (m *Module) SetUserQuery(userQuery shared.UserQuery) {
 	m.service.SetUserQuery(userQuery)
+}
+
+// GetRepository 获取 Repository（用于调度器等外部模块）
+func (m *Module) GetRepository() Repository {
+	return m.repo
 }

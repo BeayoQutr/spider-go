@@ -59,6 +59,13 @@ type Repository interface {
 	UpdateExamSyncStatus(ctx context.Context, uid int, taskID string, version int) error
 	UpdateLevelExamSyncStatus(ctx context.Context, uid int, taskID string, version int) error
 	UpdateCourseSyncStatus(ctx context.Context, uid int, taskID string, version int) error
+
+	// 清理相关
+	DeleteOldSyncTasks(ctx context.Context, before time.Time, batchSize int) (int64, error)
+	DeleteOldSyncLogs(ctx context.Context, before time.Time, batchSize int) (int64, error)
+
+	// 优化表
+	OptimizeSyncTables(ctx context.Context) error
 }
 
 // repository 实现
@@ -566,4 +573,33 @@ func (r *repository) UpdateCourseSyncStatus(ctx context.Context, uid int, taskID
 			"course_last_sync_task_id": taskID,
 			"course_sync_version":      version,
 		}).Error
+}
+
+// DeleteOldSyncTasks 删除指定时间之前的已完成同步任务，返回删除数量
+func (r *repository) DeleteOldSyncTasks(ctx context.Context, before time.Time, batchSize int) (int64, error) {
+	result := r.db.WithContext(ctx).Exec(
+		"DELETE FROM sync_tasks WHERE created_at < ? AND status IN (2, 3) LIMIT ?",
+		before, batchSize,
+	)
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	return result.RowsAffected, nil
+}
+
+// DeleteOldSyncLogs 删除指定时间之前的同步日志（仅删除关联任务已完成或已删除的），返回删除数量
+func (r *repository) DeleteOldSyncLogs(ctx context.Context, before time.Time, batchSize int) (int64, error) {
+	result := r.db.WithContext(ctx).Exec(
+		"DELETE FROM sync_logs WHERE created_at < ? AND (task_id NOT IN (SELECT task_id FROM sync_tasks WHERE status IN (0, 1))) LIMIT ?",
+		before, batchSize,
+	)
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	return result.RowsAffected, nil
+}
+
+// OptimizeSyncTables 对 sync_tasks 和 sync_logs 表执行 OPTIMIZE TABLE
+func (r *repository) OptimizeSyncTables(ctx context.Context) error {
+	return r.db.WithContext(ctx).Exec("OPTIMIZE TABLE sync_tasks, sync_logs").Error
 }

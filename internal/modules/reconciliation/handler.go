@@ -11,13 +11,15 @@ import (
 // Handler 对账HTTP处理器
 type Handler struct {
 	service  Service
+	repo     Repository      // 用于管理员直接操作数据库（如 OPTIMIZE TABLE）
 	userRepo user.Repository // 用于管理员获取已绑定用户列表
 }
 
 // NewHandler 创建对账处理器
-func NewHandler(service Service) *Handler {
+func NewHandler(service Service, repo Repository) *Handler {
 	return &Handler{
 		service: service,
+		repo:    repo,
 	}
 }
 
@@ -42,9 +44,10 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 func (h *Handler) RegisterAdminRoutes(r *gin.RouterGroup) {
 	sync := r.Group("/sync")
 	{
-		sync.POST("/all", h.AdminSyncAll)     // 管理员同步所有用户
-		sync.GET("/tasks", h.ListTasks)       // 获取任务列表
-		sync.GET("/tasks/:taskId", h.GetTask) // 获取任务详情
+		sync.POST("/all", h.AdminSyncAll)            // 管理员同步所有用户
+		sync.GET("/tasks", h.ListTasks)              // 获取任务列表
+		sync.GET("/tasks/:taskId", h.GetTask)        // 获取任务详情
+		sync.POST("/optimize", h.OptimizeSyncTables) // 优化同步表（释放磁盘空间）
 	}
 }
 
@@ -299,5 +302,29 @@ func (h *Handler) AdminSyncAll(c *gin.Context) {
 		"task":        task,
 		"total_users": len(boundUsers),
 		"message":     "同步任务已启动",
+	})
+}
+
+// OptimizeSyncTables 管理员手动执行 OPTIMIZE TABLE
+// @Summary 优化 sync_tasks 和 sync_logs 表（释放磁盘空间）
+// @Tags Admin Sync
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Router /admin/sync/optimize [post]
+func (h *Handler) OptimizeSyncTables(c *gin.Context) {
+	// 验证管理员权限
+	_, ok := c.Get("aid")
+	if !ok {
+		common.Error(c, common.CodeUnauthorized, "需要管理员权限")
+		return
+	}
+
+	if err := h.repo.OptimizeSyncTables(c.Request.Context()); err != nil {
+		common.Error(c, common.CodeInternalError, "OPTIMIZE TABLE 执行失败: "+err.Error())
+		return
+	}
+
+	common.Success(c, gin.H{
+		"message": "OPTIMIZE TABLE 执行成功",
 	})
 }
