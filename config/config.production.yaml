@@ -30,7 +30,7 @@ database:
   source: 1Panel-mysql-J4Y6
   port: 3306
   user: spider-go_dev
-  pass: 18608459749fd_20051226wdsr
+  pass: 
   name: spider-go_dev
 
 # 生产 Redis 配置（统一使用同一个 Redis 实例，不同 DB 隔离数据）
@@ -90,13 +90,13 @@ email:
   # SMTP 邮件服务器配置（生产环境）
   smtp_host: "smtp.qq.com"
   smtp_port: 465
-  username: "1628615876@qq.com"
-  password: "kwxuotnueozvdjeb"
+  username: ""
+  password: ""
   from_name: "Spider-Go 验证码"
 
 wx:
-  app_id: "wx9a4655cca1fa3f42"
-  app_secret: "dca0730331960de5ab8621f4d6e95324"
+  app_id: ""
+  app_secret: ""
 
 # 对象存储配置
 oss:
