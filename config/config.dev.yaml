@@ -93,11 +93,11 @@ email:
   smtp_host: "smtp.qq.com"
   smtp_port: 465
   username: "1628615876@qq.com"
-  password: "kwxuotnueozvdjeb"
+  password: ""
   from_name: "Spider-Go 验证码 [DEV]"
 
 wx:
-  app_id: "wx9a4655cca1fa3f42"
+  app_id: ""
   app_secret: ""
 
 # 对象存储配置
