@@ -63,7 +63,7 @@ func (t *UserSyncTask) Run(ctx context.Context) error {
 		}
 
 		// 2. 尝试登录验证密码是否有效
-		err := t.sessionService.LoginCheck(ctx, u.Sid, u.Spwd)
+		err := t.sessionService.LoginCheck(ctx, u.Uid, u.Sid, u.Spwd)
 		if err != nil {
 			// 登录失败，密码无效，清除绑定信息
 			log.Printf("[UserSyncTask] 用户 %d (学号: %s) 登录失败，清除绑定信息: %v", u.Uid, u.Sid, err)

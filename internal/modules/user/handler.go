@@ -2,6 +2,7 @@ package user
 
 import (
 	"net/http"
+	"os"
 	"spider-go/internal/common"
 
 	"github.com/gin-gonic/gin"
@@ -39,8 +40,9 @@ func (h *Handler) RegisterRoutes(public *gin.RouterGroup, authenticated *gin.Rou
 	}
 
 	authenticated.GET("/info", h.GetUserInfo)          // 获取用户信息
-	authenticated.POST("/bind", h.BindJwc)             // 绑定教务系统
-	authenticated.GET("/is-bind", h.CheckIsBind)       // 检查绑定状态
+	authenticated.POST("/bind", h.BindJwc)                         // 绑定教务系统（密码登录）
+	authenticated.POST("/bind-with-cookies", h.BindJwcWithCookies) // 绑定教务系统（Cookie 方式）
+	authenticated.GET("/is-bind", h.CheckIsBind)                   // 检查绑定状态
 	authenticated.GET("/bind-status", h.GetBindStatus) // 获取绑定状态（包含绑定次数信息）
 	authenticated.POST("/wechat/bind", h.WeChatBind)   // 老用户绑定微信
 	authenticated.POST("/update-name", h.UpdateName)   // 更新用户名
@@ -200,6 +202,39 @@ func (h *Handler) BindJwc(c *gin.Context) {
 	common.Success(c, gin.H{"message": "绑定成功"})
 }
 
+// BindJwcWithCookies 通过 Cookie 绑定教务系统（无需密码）
+// @Summary 通过 Cookie 绑定教务系统
+// @Tags User
+// @Accept JSON
+// @Produce JSON
+// @Param request body BindJwcWithCookiesRequest true "Cookie绑定请求"
+// @Success 200 {object} gin.H
+// @Router /user/bind-with-cookies [post]
+func (h *Handler) BindJwcWithCookies(c *gin.Context) {
+	uid, exists := c.Get("uid")
+	if !exists {
+		common.Error(c, common.CodeUnauthorized, "未授权")
+		return
+	}
+
+	var req BindJwcWithCookiesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.Error(c, common.CodeInvalidParams, err.Error())
+		return
+	}
+
+	if err := h.service.BindJwcWithCookies(c.Request.Context(), uid.(int), req.Sid, req.Cookies); err != nil {
+		if appErr, ok := err.(*common.AppError); ok {
+			common.Error(c, appErr.Code, appErr.Message)
+		} else {
+			common.Error(c, common.CodeInternalError, err.Error())
+		}
+		return
+	}
+
+	common.Success(c, gin.H{"message": "绑定成功"})
+}
+
 // GetBindStatus 获取绑定状态
 // @Summary 获取绑定状态
 // @Tags User
@@ -256,6 +291,23 @@ func (h *Handler) SendEmailCaptcha(c *gin.Context) {
 	var req SendEmailCaptchaRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		common.Error(c, common.CodeInvalidParams, err.Error())
+		return
+	}
+
+	// 开发环境：跳过邮件发送，直接返回验证码
+	if os.Getenv("GO_ENV") == "dev" {
+		code, err := h.captchaService.SendEmailCaptchaDev(c.Request.Context(), req.Email)
+		if err != nil {
+			common.Error(c, common.CodeInternalError, "生成验证码失败")
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"code":    0,
+			"message": "验证码已生成（开发环境）",
+			"data": gin.H{
+				"captcha": code,
+			},
+		})
 		return
 	}
 

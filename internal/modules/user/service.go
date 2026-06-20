@@ -42,6 +42,8 @@ type Service interface {
 
 	// BindJwc 教务系统绑定相关
 	BindJwc(ctx context.Context, uid int, sid, spwd, ipAddress, userAgent string) error
+	// BindJwcWithCookies 通过手动 Cookie 绑定教务系统
+	BindJwcWithCookies(ctx context.Context, uid int, sid string, cookies map[string]string) error
 	// CheckIsBind 检查是否绑定教务处
 	CheckIsBind(ctx context.Context, uid int) (bool, error)
 	// GetBindStatus 获取绑定状态（包含绑定次数信息）
@@ -243,7 +245,7 @@ func (s *userService) BindJwc(ctx context.Context, uid int, sid, spwd, ipAddress
 	isSameSid := (user.Sid != "" && user.Sid == sid)
 
 	// 4. 验证教务系统账号
-	if err := s.sessionService.LoginCheck(ctx, sid, spwd); err != nil {
+	if err := s.sessionService.LoginCheck(ctx, uid, sid, spwd); err != nil {
 		// 记录失败日志
 		_ = s.logBindAttempt(ctx, uid, user.Sid, sid, BindStatusFailedAuth, "教务系统账号或密码错误", ipAddress, userAgent)
 		return common.NewAppError(common.CodeJwcLoginFailed, "用户名或密码错误")
@@ -301,6 +303,57 @@ func (s *userService) BindJwc(ctx context.Context, uid int, sid, spwd, ipAddress
 
 	// 6. 清除旧的教务系统会话缓存
 	_ = s.sessionService.InvalidateSession(ctx, uid)
+
+	return nil
+}
+
+// BindJwcWithCookies 通过手动 Cookie 绑定教务系统（绕过 CAS/MFA）
+func (s *userService) BindJwcWithCookies(ctx context.Context, uid int, sid string, cookies map[string]string) error {
+	if sid == "" || len(cookies) == 0 {
+		return ErrEmptyParams
+	}
+
+	// 1. 查询用户当前绑定状态
+	user, err := s.repo.FindByID(ctx, uid)
+	if err != nil {
+		return err
+	}
+
+	// 2. 检查是否已绑定学号（学号一旦绑定不可更换）
+	if user.Sid != "" && user.Sid != sid {
+		return common.NewAppError(common.CodeBindLimitExceeded, "学号已绑定，不允许更换。如需更换请联系管理员")
+	}
+
+	// 3. 将 map 转为 []*http.Cookie
+	var httpCookies []*http.Cookie
+	for name, value := range cookies {
+		httpCookies = append(httpCookies, &http.Cookie{
+			Name:  name,
+			Value: value,
+		})
+	}
+
+	// 4. 存储 Cookie 到 Redis
+	if err := s.sessionService.SetCookiesDirectly(ctx, uid, httpCookies); err != nil {
+		return common.NewAppError(common.CodeCacheError, "存储会话失败")
+	}
+
+	// 5. 更新用户绑定信息
+	now := time.Now()
+	updates := map[string]interface{}{
+		"sid":          sid,
+		"spwd":         "cookie-auth", // 占位，标记为 Cookie 方式绑定
+		"last_bind_at": now,
+	}
+
+	isSameSid := (user.Sid != "" && user.Sid == sid)
+	if !isSameSid {
+		updates["total_bind_count"] = user.TotalBindCount + 1
+	}
+
+	if err := s.repo.(*repository).db.WithContext(ctx).Model(&User{}).Where("uid = ?", uid).Updates(updates).Error; err != nil {
+		return common.NewAppError(common.CodeDatabaseError, "绑定失败，请稍后重试")
+	}
 
 	return nil
 }

@@ -6,11 +6,13 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"spider-go/internal/api"
 	"spider-go/internal/app"
 	"spider-go/internal/scheduler"
 	"spider-go/internal/scheduler/tasks"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/gin-gonic/gin"
@@ -54,6 +56,27 @@ func main() {
 
 	// 4. 设置路由
 	api.SetupRoutes(r, container)
+
+	// 4.1 提供前端静态文件 + SPA 回退
+	frontendDir := filepath.Join(".", "frontend", "dist")
+	r.Use(func(c *gin.Context) {
+		path := c.Request.URL.Path
+		// API 路由直接放行
+		if strings.HasPrefix(path, "/api/") {
+			c.Next()
+			return
+		}
+		// 尝试提供静态文件
+		filePath := filepath.Join(frontendDir, path)
+		if info, err := os.Stat(filePath); err == nil && !info.IsDir() {
+			c.File(filePath)
+			c.Abort()
+			return
+		}
+		// SPA 回退：所有其他路径返回 index.html
+		c.File(filepath.Join(frontendDir, "index.html"))
+		c.Abort()
+	})
 
 	// 5. 启动服务器
 	port := container.Config.App.Port

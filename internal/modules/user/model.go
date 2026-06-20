@@ -63,6 +63,12 @@ type BindJwcRequest struct {
 	Spwd string `json:"spwd" binding:"required"` // 教务系统密码
 }
 
+// BindJwcWithCookiesRequest 通过 Cookie 绑定教务系统请求
+type BindJwcWithCookiesRequest struct {
+	Sid     string            `json:"sid" binding:"required"`     // 学号
+	Cookies map[string]string `json:"cookies" binding:"required"` // 浏览器复制的 Cookie 键值对
+}
+
 // ResetPasswordRequest 重置密码请求
 type ResetPasswordRequest struct {
 	Email    string `json:"email" binding:"required,email"`
