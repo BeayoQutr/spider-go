@@ -4,11 +4,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Spider-Go is a Go-based educational administration system crawler and management platform for CSUFT (Changsha University of Science and Technology). It provides REST APIs for querying grades, course schedules, exam schedules, and grade analysis.
+Spider-Go is a Go-based educational administration system crawler and management platform for CSUFT (Changsha University of Science and Technology). It provides a full-stack solution with REST APIs and a React frontend for querying grades, course schedules, exam schedules, and grade analysis.
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Backend | Go 1.25 + Gin + GORM + MySQL + Redis |
+| Frontend | React 19 + TypeScript + Vite + TailwindCSS v4 + Recharts |
+| Auth | JWT (user + admin dual channel) |
+| State | Zustand (frontend), Redis (backend cache) |
+| Build | Go compiler, Vite bundler |
 
 ## Development Commands
 
-### Running the Application
+### Backend
 ```bash
 # Run directly (defaults to dev environment)
 go run main.go
@@ -17,54 +27,84 @@ go run main.go
 go run main.go -env=dev
 go run main.go -env=production
 
-# Build and run
-go build -o spider-go
-./spider-go
-
-# Build for Windows
-go build -o spider-go.exe
+# Build
+go build -o spider-go-dev.exe
 
 # Build optimized production binary
-go build -ldflags="-s -w" -o spider-go-production.exe
+go build -ldflags="-s -w" -o spider-go.exe
 ```
 
 **Environment Configuration**: The app uses `GO_ENV` environment variable or `-env` flag. Config files are loaded from:
 - `config/config.dev.yaml` (development)
 - `config/config.production.yaml` (production)
 
+### Frontend
+```bash
+cd frontend
+
+# Install dependencies
+npm install
+
+# Development (with HMR, Vite proxy /api → localhost:8080)
+npm run dev
+
+# Build for production
+npm run build
+
+# TypeScript check
+npx tsc --noEmit
+```
+
+### Production Mode (Backend + Frontend unified)
+
+When the backend is compiled and `frontend/dist/` exists, the Go server serves the frontend static files at `/` and API at `/api/*`. No separate web server needed.
+
+```bash
+cd frontend && npm run build
+cd .. && go build -o spider-go-dev.exe
+./spider-go-dev.exe -env=dev
+# Visit http://localhost:8080
+```
+
+### Windows Auto-Start
+
+To register the backend as a startup task (hidden, no console window):
+
+1. Build: `go build -o spider-go-dev.exe`
+2. Build frontend: `cd frontend && npm run build`
+3. Place a `.vbs` script in the Startup folder:
+   ```vbscript
+   Set WshShell = CreateObject("WScript.Shell")
+   WshShell.CurrentDirectory = "E:\spider-go\spider-go"
+   WshShell.Run "E:\spider-go\spider-go\spider-go-dev.exe -env=dev", 0, False
+   ```
+4. Create a desktop shortcut pointing to `http://localhost:8080`
+
 ### Dependencies
 ```bash
-# Install/update dependencies
+# Go
 go mod download
-
-# Tidy dependencies (run this after adding/removing imports)
 go mod tidy
 
-# Format imports (useful when adding new imports)
-go run golang.org/x/tools/cmd/goimports@latest -w .
-
-# Verify dependencies
-go mod verify
+# Frontend
+cd frontend && npm install
 ```
 
 **Go Version**: This project requires Go 1.25 or higher (see `go.mod`).
 
-### Database
-The application uses GORM with auto-migration. Database tables are created automatically on startup. No migration commands needed.
-
-### Debugging and Development
-```bash
-# Run with timeout (useful for testing)
-timeout 2 ./spider-go.exe   # Windows
-timeout 2s ./spider-go      # Linux/Mac
-
-# Build and test quickly
-go build -o spider-go-test && ./spider-go-test
-```
-
 ## Architecture
 
-### Current Architecture
+### Frontend (`frontend/`)
+
+React 19 SPA with mobile-first design, served directly by the Go backend in production.
+
+- **Pages**: 21 pages (15 user + 6 admin), routed via React Router v7
+- **Layouts**: `MainLayout` (bottom tab bar for mobile), `AdminLayout` (sidebar), `AuthLayout` (centered card)
+- **API Layer**: `src/api/client.ts` — dual Axios instances (user + admin JWT), interceptors handle 401 auto-redirect
+- **Stores**: Zustand (`authStore` for JWT persistence, `appStore` for global state)
+- **Key modules**: `api/auth.ts`, `api/user.ts`, `api/grades.ts`, `api/courses.ts`, `api/exams.ts`, `api/admin.ts`, etc.
+
+### Backend (`internal/`)
 
 The project follows a **domain-driven module architecture**:
 

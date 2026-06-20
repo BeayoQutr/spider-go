@@ -15,6 +15,9 @@ type CaptchaService interface {
 	// SendEmailCaptcha 发送邮箱验证码
 	SendEmailCaptcha(ctx context.Context, email string) error
 
+	// SendEmailCaptchaDev 开发环境：生成验证码并存储到 Redis，但不发送邮件，直接返回验证码
+	SendEmailCaptchaDev(ctx context.Context, email string) (string, error)
+
 	// VerifyEmailCaptcha 验证邮箱验证码
 	VerifyEmailCaptcha(ctx context.Context, email string, code string) error
 }
@@ -51,6 +54,19 @@ func (s *captchaService) SendEmailCaptcha(ctx context.Context, email string) err
 	}
 
 	return nil
+}
+
+// SendEmailCaptchaDev 开发环境：只生成验证码并存储，不发送邮件
+func (s *captchaService) SendEmailCaptchaDev(ctx context.Context, email string) (string, error) {
+	// 1. 生成 6 位数字验证码
+	code := s.generateCode(6)
+
+	// 2. 存储到 Redis，5 分钟过期
+	if err := s.captchaCache.SetCaptcha(ctx, email, code, 5*time.Minute); err != nil {
+		return "", common.NewAppError(common.CodeCacheError, "存储验证码失败")
+	}
+
+	return code, nil
 }
 
 // VerifyEmailCaptcha 验证邮箱验证码

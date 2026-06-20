@@ -1,0 +1,26 @@
+# 编译产物
+spider-go-dev.exe
+spider-go.exe
+spider-go
+*.exe~
+*.test
+
+# 前端
+frontend/node_modules/
+frontend/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 本地配置（含密钥，不可提交）
+.claude/settings.local.json
+
+# 日志
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

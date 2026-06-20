@@ -19,22 +19,38 @@ type EmailService interface {
 
 // emailServiceImpl 邮件服务实现
 type emailServiceImpl struct {
-	smtpHost string
-	smtpPort int
-	username string
-	password string
-	fromName string
+	smtpHost  string
+	smtpPort  int
+	username  string
+	password  string
+	fromName  string
+	fromEmail string
 }
 
 // NewEmailService 创建邮件服务
 func NewEmailService(smtpHost string, smtpPort int, username, password, fromName string) EmailService {
-	return &emailServiceImpl{
-		smtpHost: smtpHost,
-		smtpPort: smtpPort,
-		username: username,
-		password: password,
-		fromName: fromName,
+	// 如果 username 不含 @，则 fromEmail 用 username@qq.com 格式
+	fromEmail := username
+	if !containsAt(username) {
+		fromEmail = username + "@qq.com"
 	}
+	return &emailServiceImpl{
+		smtpHost:  smtpHost,
+		smtpPort:  smtpPort,
+		username:  username,
+		password:  password,
+		fromName:  fromName,
+		fromEmail: fromEmail,
+	}
+}
+
+func containsAt(s string) bool {
+	for _, c := range s {
+		if c == '@' {
+			return true
+		}
+	}
+	return false
 }
 
 // SendVerificationCode 发送验证码邮件
@@ -49,7 +65,7 @@ func (s *emailServiceImpl) SendEmail(ctx context.Context, to string, subject str
 	m := gomail.NewMessage()
 
 	// 设置发件人
-	m.SetHeader("From", m.FormatAddress(s.username, s.fromName))
+	m.SetHeader("From", m.FormatAddress(s.fromEmail, s.fromName))
 
 	// 设置收件人
 	m.SetHeader("To", to)

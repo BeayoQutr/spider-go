@@ -46,7 +46,9 @@ type SessionService interface {
 	// LoginAndGetClient 登录 CAS 并返回带 TGC cookie 的 client，供其他系统复用
 	LoginAndGetClient(ctx context.Context, username, password string) (*http.Client, error)
 	//LoginCheck 模拟一次登录以校验绑定的是否正确
-	LoginCheck(ctx context.Context, username, password string) error
+	LoginCheck(ctx context.Context, uid int, username, password string) error
+	// SetCookiesDirectly 直接设置用户的会话 Cookie（绕过 CAS 登录，用于手动 Cookie 绑定）
+	SetCookiesDirectly(ctx context.Context, uid int, cookies []*http.Cookie) error
 }
 
 // jwcSessionService 教务系统会话服务实现
@@ -228,6 +230,14 @@ func (s *jwcSessionService) GenerateRandomFingerPrintHash() (string, error) {
 	return hex.EncodeToString(h[:]), nil
 }
 
+// GenerateFingerPrintForUser 根据用户 UID 生成固定的设备指纹
+// 同一用户每次登录使用相同指纹，CAS 不会重复要求 MFA
+func (s *jwcSessionService) GenerateFingerPrintForUser(uid int) string {
+	data := fmt.Sprintf("spider-go-device-fingerprint-v2-%d", uid)
+	h := sha256.Sum256([]byte(data))
+	return hex.EncodeToString(h[:])
+}
+
 // LoginAndCacheWithConfig 通用登录方法，支持自定义 URL 和缓存
 func (s *jwcSessionService) LoginAndCacheWithConfig(ctx context.Context, uid int, username, password string, loginURL, redirectURL string, cookieCache CookieCache) error {
 	// 创建 cookie jar
@@ -277,10 +287,7 @@ func (s *jwcSessionService) LoginAndCacheWithConfig(ctx context.Context, uid int
 		return common.NewAppError(common.CodeJwcLoginFailed, fmt.Sprintf("密码加密失败: %v", err))
 	}
 
-	fpVisitorId, err := s.GenerateRandomFingerPrintHash()
-	if err != nil {
-		return common.NewAppError(common.CodeInternalError, "生成设备指纹失败")
-	}
+	fpVisitorId := s.GenerateFingerPrintForUser(uid)
 
 	// 2.5 MFA 检测
 	needMFA, _, err := s.detectMFA(ctx, username, password, fpVisitorId)
@@ -502,7 +509,7 @@ func (s *jwcSessionService) LoginAndGetClient(ctx context.Context, username, pas
 }
 
 // LoginCheck 检查账号是否能被教务系统绑定
-func (s *jwcSessionService) LoginCheck(ctx context.Context, username, password string) error {
+func (s *jwcSessionService) LoginCheck(ctx context.Context, uid int, username, password string) error {
 	// 创建 cookie jar
 	jar, err := cookiejar.New(&cookiejar.Options{
 		PublicSuffixList: publicsuffix.List,
@@ -546,10 +553,7 @@ func (s *jwcSessionService) LoginCheck(ctx context.Context, username, password s
 		return common.NewAppError(common.CodeJwcLoginFailed, fmt.Sprintf("密码加密失败: %v", err))
 	}
 
-	fpVisitorId, err := s.GenerateRandomFingerPrintHash()
-	if err != nil {
-		return common.NewAppError(common.CodeInternalError, "生成设备指纹失败")
-	}
+	fpVisitorId := s.GenerateFingerPrintForUser(uid)
 
 	// MFA 检测
 	needMFA, _, err := s.detectMFA(ctx, username, password, fpVisitorId)
@@ -604,6 +608,11 @@ func (s *jwcSessionService) LoginCheck(ctx context.Context, username, password s
 
 	// TGC cookie 已在 jar 中，返回 client
 	return nil
+}
+
+// SetCookiesDirectly 直接设置用户的会话 Cookie
+func (s *jwcSessionService) SetCookiesDirectly(ctx context.Context, uid int, cookies []*http.Cookie) error {
+	return s.sessionCache.SetCookies(ctx, uid, cookies, s.cacheExpire)
 }
 
 // isTimeoutError 判断错误是否为超时错误
