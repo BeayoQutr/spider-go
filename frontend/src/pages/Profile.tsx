@@ -15,12 +15,9 @@ export default function Profile() {
   const [loading, setLoading] = useState(true)
   const [bindStatus, setBindStatus] = useState<any>(null)
   const [showBind, setShowBind] = useState<'password' | 'cookie' | null>(null)
-  const [sid, setSid] = useState(() => localStorage.getItem('last_sid') || '20245705')
+  const [sid, setSid] = useState(() => localStorage.getItem('last_sid') || '')
   const [spwd, setSpwd] = useState('')
-  const [cookieJson, setCookieJson] = useState(() =>
-    localStorage.getItem('last_cookie_json') ||
-    '{"webvpn-token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjMxMTIxLCJ1c2VyTmFtZSI6IjIwMjQ1NzA1IiwiYXV0aGVudGljYXRlRXh0ZXJuYWxJZCI6ImVBRjBJRzVOIiwiYXV0aGVudGljYXRlVHlwZSI6NCwiYXV0aGVudGljYXRlRXh0ZXJuYWxVc2VySWQiOiIyMDI0NTcwNSIsInNhbHQiOiIxODU2OTczMzA1NjQwMjQ1OTYiLCJuZWVkVHJpZ2dlclRGQSI6ZmFsc2UsIm5lZWRDaGFuZ2VQd2QiOmZhbHNlLCJzZXNzaW9uSWQiOiIiLCJleHAiOjE4MTM1MDk2NjcsImlzcyI6IndlYnZwbiJ9.ZJOmW7nYL_ovaahFa3vdx-2nlLJEJy82x8JcdrXYtKc","JSESSIONID":"C278CB53D4C1470BC33D95B98E2D2D50","SERVERID":"127"}'
-  )
+  const [cookieJson, setCookieJson] = useState(() => localStorage.getItem('last_cookie_json') || '')
   const [bindError, setBindError] = useState('')
   const [bindSuccess, setBindSuccess] = useState('')
   const [bindLoading, setBindLoading] = useState(false)
